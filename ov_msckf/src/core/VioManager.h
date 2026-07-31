@@ -48,6 +48,7 @@ namespace ov_msckf {
 class State;
 class StateHelper;
 class UpdaterMSCKF;
+class UpdaterPO;
 class UpdaterSLAM;
 class UpdaterZeroVelocity;
 class Propagator;
@@ -199,6 +200,9 @@ protected:
 
   /// Our MSCKF feature updater
   std::shared_ptr<UpdaterMSCKF> updaterMSCKF;
+
+  /// Our pose-only (PO-MSCKF) feature updater
+  std::shared_ptr<UpdaterPO> updaterPO;
 
   /// Our SLAM/ARUCO feature updater
   std::shared_ptr<UpdaterSLAM> updaterSLAM;
