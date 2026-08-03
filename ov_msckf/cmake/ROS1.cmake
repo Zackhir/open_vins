@@ -86,6 +86,7 @@ list(APPEND LIBRARY_SOURCES
         src/update/UpdaterHelper.cpp
         src/update/UpdaterMSCKF.cpp
         src/update/UpdaterPO.cpp
+        src/update/PoseOnlyGeometry.cpp
         src/update/UpdaterSLAM.cpp
         src/update/UpdaterZeroVelocity.cpp
 )
@@ -154,6 +155,14 @@ install(TARGETS test_sim_meas
 add_executable(test_sim_repeat src/test_sim_repeat.cpp)
 target_link_libraries(test_sim_repeat ov_msckf_lib ${thirdparty_libraries})
 install(TARGETS test_sim_repeat
+        ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+        LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+        RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+
+add_executable(test_pose_only_geometry src/test_pose_only_geometry.cpp)
+target_link_libraries(test_pose_only_geometry ov_msckf_lib ${thirdparty_libraries})
+install(TARGETS test_pose_only_geometry
         ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
         LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
         RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
