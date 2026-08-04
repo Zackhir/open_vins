@@ -168,3 +168,11 @@ install(TARGETS test_pose_only_geometry
         RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
+add_executable(test_pose_only_jacobians src/test_pose_only_jacobians.cpp)
+target_link_libraries(test_pose_only_jacobians ov_msckf_lib ${thirdparty_libraries})
+install(TARGETS test_pose_only_jacobians
+        ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+        LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+        RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+

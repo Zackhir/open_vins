@@ -28,14 +28,18 @@
 namespace ov_msckf {
 
 /**
- * @brief Standalone pose-only (PO) multi-view geometry helpers (PO-MSCKF / Cai).
+ * @brief Standalone pose-only (PO) multi-view geometry helpers (PO-MSCKF).
  *
  * Camera pose convention matches OpenVINS FeatureInitializer::ClonePose:
  *  - R_GtoC: rotation from global to camera
  *  - p_CinG: camera center in global
  *
  * Bearings are normalized image coordinates p = [x, y, 1]^T (or any scale; z>0).
- * Step 2: residual / base-view selection only (no filter Jacobians yet).
+ *
+ * Jacobians use left-multiplicative SO(3) error on R_GtoC and additive error on p_CinG:
+ *   R ← Exp(δθ) R ,  p ← p + δp
+ * Each pose Jacobian is 2×6 = [∂r/∂δθ | ∂r/∂δp].
+ * If residual camera i coincides with a base view, total ∂r/∂pose = sum of the role blocks.
  */
 class PoseOnlyGeometry {
 public:
@@ -43,6 +47,13 @@ public:
   struct CameraPose {
     Eigen::Matrix3d R_GtoC = Eigen::Matrix3d::Identity();
     Eigen::Vector3d p_CinG = Eigen::Vector3d::Zero();
+  };
+
+  /// Analytical residual Jacobians w.r.t. base-left j, base-right k, and residual camera i
+  struct ResidualPoseJacobians {
+    Eigen::Matrix<double, 2, 6> H_j = Eigen::Matrix<double, 2, 6>::Zero();
+    Eigen::Matrix<double, 2, 6> H_k = Eigen::Matrix<double, 2, 6>::Zero();
+    Eigen::Matrix<double, 2, 6> H_i = Eigen::Matrix<double, 2, 6>::Zero();
   };
 
   /**
@@ -84,6 +95,25 @@ public:
    */
   static Eigen::Vector2d residual_normalized(const Eigen::Vector3d &bearing_j, const CameraPose &pose_j, const Eigen::Vector3d &bearing_k,
                                              const CameraPose &pose_k, const CameraPose &pose_i, const Eigen::Vector3d &z_i);
+
+  /**
+   * @brief Perspective Jacobian ∂π/∂p (2×3), paper eq. (28).
+   */
+  static Eigen::Matrix<double, 2, 3> project_jacobian(const Eigen::Vector3d &p_Cam);
+
+  /**
+   * @brief Jacobian of p_i(PO) w.r.t. poses j,k,i (each 3×6 = [∂/∂δθ | ∂/∂δp]).
+   */
+  static void feature_jacobian_poses(const Eigen::Vector3d &bearing_j, const CameraPose &pose_j, const Eigen::Vector3d &bearing_k,
+                                     const CameraPose &pose_k, const CameraPose &pose_i, Eigen::Matrix<double, 3, 6> &Dp_Dj,
+                                     Eigen::Matrix<double, 3, 6> &Dp_Dk, Eigen::Matrix<double, 3, 6> &Dp_Di);
+
+  /**
+   * @brief Jacobian of residual r_i w.r.t. poses j,k,i (paper eqs. 28–38 chain rule).
+   */
+  static ResidualPoseJacobians residual_jacobian_poses(const Eigen::Vector3d &bearing_j, const CameraPose &pose_j,
+                                                       const Eigen::Vector3d &bearing_k, const CameraPose &pose_k, const CameraPose &pose_i,
+                                                       const Eigen::Vector3d &z_i);
 };
 
 } // namespace ov_msckf
