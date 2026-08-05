@@ -37,6 +37,9 @@ struct StateOptions {
   /// Bool to determine whether or not to do first estimate Jacobians
   bool do_fej = true;
 
+  /// If true, use pose-only (PO-MSCKF) visual update instead of classical MSCKF
+  bool use_pose_only_update = false;
+
   /// Numerical integration methods
   enum IntegrationMethod { DISCRETE, RK4, ANALYTICAL };
 
@@ -95,6 +98,7 @@ struct StateOptions {
   void print(const std::shared_ptr<ov_core::YamlParser> &parser = nullptr) {
     if (parser != nullptr) {
       parser->parse_config("use_fej", do_fej);
+      parser->parse_config("use_pose_only_update", use_pose_only_update, false);
 
       // Integration method
       std::string integration_str = "rk4";
@@ -156,6 +160,7 @@ struct StateOptions {
       }
     }
     PRINT_DEBUG("  - use_fej: %d\n", do_fej);
+    PRINT_DEBUG("  - use_pose_only_update: %d\n", use_pose_only_update);
     PRINT_DEBUG("  - integration: %d\n", integration_method);
     PRINT_DEBUG("  - calib_cam_extrinsics: %d\n", do_calib_camera_pose);
     PRINT_DEBUG("  - calib_cam_intrinsics: %d\n", do_calib_camera_intrinsics);
