@@ -41,10 +41,18 @@ class State;
 /**
  * @brief Pose-only (PO-MSCKF) visual updater.
  *
- * Replaces classical MSCKF triangulation + nullspace projection with pose-only
- * reprojection residuals (Du et al.). Camera poses are formed from IMU clones
- * and calib_IMUtoCAM; Jacobians are chained onto IMU clones (extrinsics-in-H
- * and FEJ polish deferred to a later step).
+ * Drop-in alternative to UpdaterMSCKF when StateOptions::use_pose_only_update is true.
+ *
+ * Pipeline (see update()):
+ *  1) Clean features (need >= 2 clone-timed views)
+ *  2) For each feature: PO residual r + Jacobian Hx (no triangulation, no nullspace)
+ *  3) Chi-square outlier gate
+ *  4) Stack / compress / EKFUpdate
+ *
+ * Camera poses = IMU clone pose ⊕ calib_IMUtoCAM. Hx is w.r.t. IMU clones only;
+ * online extrinsics/FEJ Jacobian polish is left for a later step.
+ *
+ * Math helpers live in PoseOnlyGeometry (paper eqs. 8, 10–11, 28–38).
  */
 class UpdaterPO {
 
