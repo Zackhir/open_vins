@@ -23,6 +23,7 @@
 #define OV_MSCKF_UPDATER_PO_H
 
 #include <Eigen/Eigen>
+#include <map>
 #include <memory>
 
 #include "feat/FeatureInitializerOptions.h"
@@ -31,23 +32,19 @@
 
 namespace ov_core {
 class Feature;
-class FeatureInitializer;
 } // namespace ov_core
 
 namespace ov_msckf {
 
 class State;
-class UpdaterMSCKF;
 
 /**
  * @brief Pose-only (PO-MSCKF) visual updater.
  *
- * Will replace classical MSCKF triangulation + nullspace projection with
- * pose-only reprojection residuals (Du et al., PO-MSCKF).
- *
- * Step 1 scaffold: when enabled, this class currently delegates to the
- * classical MSCKF updater so plumbing can be tested with identical results.
- * Later steps replace the update body with PO residuals and Jacobians.
+ * Replaces classical MSCKF triangulation + nullspace projection with pose-only
+ * reprojection residuals (Du et al.). Camera poses are formed from IMU clones
+ * and calib_IMUtoCAM; Jacobians are chained onto IMU clones (extrinsics-in-H
+ * and FEJ polish deferred to a later step).
  */
 class UpdaterPO {
 
@@ -55,24 +52,21 @@ public:
   /**
    * @brief Default constructor for our pose-only updater
    * @param options Updater options (include measurement noise value)
-   * @param feat_init_options Feature initializer options
+   * @param feat_init_options Unused for PO path (kept for API parity with MSCKF)
    */
   UpdaterPO(UpdaterOptions &options, ov_core::FeatureInitializerOptions &feat_init_options);
 
   /**
-   * @brief Given tracked features, this will try to use them to update the state.
-   *
-   * @param state State of the filter
-   * @param feature_vec Features that can be used for update
+   * @brief Update the state using pose-only residuals for the given features.
    */
   void update(std::shared_ptr<State> state, std::vector<std::shared_ptr<ov_core::Feature>> &feature_vec);
 
 protected:
-  /// Options used during update
+  /// Options used during update (pixel noise, chi2 multiplier, ...)
   UpdaterOptions _options;
 
-  /// Temporary MSCKF fallback used by the Step 1 scaffold (identical behavior)
-  std::shared_ptr<UpdaterMSCKF> msckf_fallback;
+  /// Chi-squared 95% thresholds keyed by residual dof
+  std::map<int, double> chi_squared_table;
 };
 
 } // namespace ov_msckf
