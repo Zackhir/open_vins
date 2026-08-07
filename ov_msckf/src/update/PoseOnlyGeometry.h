@@ -114,6 +114,28 @@ public:
   static ResidualPoseJacobians residual_jacobian_poses(const Eigen::Vector3d &bearing_j, const CameraPose &pose_j,
                                                        const Eigen::Vector3d &bearing_k, const CameraPose &pose_k, const CameraPose &pose_i,
                                                        const Eigen::Vector3d &z_i);
+
+  /**
+   * @brief Compose camera pose from IMU pose and IMU→CAM extrinsics (OpenVINS convention).
+   * R_GtoC = R_ItoC R_GtoI,  p_CinG = p_IinG - R_GtoC^T p_IinC
+   */
+  static CameraPose compose_camera_pose(const Eigen::Matrix3d &R_GtoI, const Eigen::Vector3d &p_IinG, const Eigen::Matrix3d &R_ItoC,
+                                        const Eigen::Vector3d &p_IinC);
+
+  /**
+   * @brief Chain ∂r/∂(camera pose) → ∂r/∂(IMU clone) under OpenVINS JPL orientation error.
+   *
+   * Camera model uses left-Exp R←Exp(δθ)R; JPL IMU uses R←Exp(-δθ)R, so δθ_cam ≈ -R_ItoC δθ_I.
+   */
+  static Eigen::Matrix<double, 2, 6> chain_camera_H_to_imu_jpl(const Eigen::Matrix<double, 2, 6> &H_cam, const Eigen::Matrix3d &R_GtoI,
+                                                              const Eigen::Matrix3d &R_ItoC, const Eigen::Vector3d &p_IinC);
+
+  /**
+   * @brief Chain ∂r/∂(camera pose) → ∂r/∂(IMU→CAM calib) under OpenVINS JPL orientation error.
+   * δθ_cam ≈ -δθ_calib; translation via p_CinG = p_IinG - R_GtoC^T p_IinC.
+   */
+  static Eigen::Matrix<double, 2, 6> chain_camera_H_to_calib_jpl(const Eigen::Matrix<double, 2, 6> &H_cam, const Eigen::Matrix3d &R_GtoI,
+                                                                const Eigen::Matrix3d &R_ItoC, const Eigen::Vector3d &p_IinC);
 };
 
 } // namespace ov_msckf

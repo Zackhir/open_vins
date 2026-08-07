@@ -120,6 +120,11 @@ ament_target_dependencies(test_pose_only_jacobians ${ament_libraries})
 target_link_libraries(test_pose_only_jacobians ov_msckf_lib ${thirdparty_libraries})
 install(TARGETS test_pose_only_jacobians DESTINATION lib/${PROJECT_NAME})
 
+add_executable(test_pose_only_chain src/test_pose_only_chain.cpp)
+ament_target_dependencies(test_pose_only_chain ${ament_libraries})
+target_link_libraries(test_pose_only_chain ov_msckf_lib ${thirdparty_libraries})
+install(TARGETS test_pose_only_chain DESTINATION lib/${PROJECT_NAME})
+
 # Install launch and config directories
 install(DIRECTORY launch/ DESTINATION share/${PROJECT_NAME}/launch/)
 install(DIRECTORY ../config/ DESTINATION share/${PROJECT_NAME}/config/)

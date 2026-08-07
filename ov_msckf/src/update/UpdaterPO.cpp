@@ -50,63 +50,42 @@ struct PoView {
   double timestamp = 0;
   Eigen::Vector3d bearing = Eigen::Vector3d::Zero(); // normalized [x,y,1]
   Eigen::Vector2d uv_ms = Eigen::Vector2d::Zero();   // raw pixel measurement
-  PoseOnlyGeometry::CameraPose cam_pose;
+  PoseOnlyGeometry::CameraPose cam_pose;             // current estimate (residual)
+  PoseOnlyGeometry::CameraPose cam_pose_lin;         // FEJ if enabled, else current (Jacobians)
+  Eigen::Matrix3d R_GtoI_lin = Eigen::Matrix3d::Identity();
+  Eigen::Matrix3d R_ItoC = Eigen::Matrix3d::Identity();
+  Eigen::Vector3d p_IinC = Eigen::Vector3d::Zero();
   std::shared_ptr<PoseJPL> clone_imu;
   std::shared_ptr<PoseJPL> calib_imu_to_cam;
 };
-
-PoseOnlyGeometry::CameraPose camera_pose_from_imu(const std::shared_ptr<PoseJPL> &clone_imu,
-                                                  const std::shared_ptr<PoseJPL> &calib) {
-  // Same composition as UpdaterMSCKF / FeatureInitializer
-  PoseOnlyGeometry::CameraPose pose;
-  pose.R_GtoC = calib->Rot() * clone_imu->Rot();
-  pose.p_CinG = clone_imu->pos() - pose.R_GtoC.transpose() * calib->pos();
-  return pose;
-}
-
-/**
- * @brief Map camera-pose Jacobian (our left-Exp R_GtoC model) to OpenVINS IMU clone error.
- *
- * OpenVINS JPL orientation uses R'≈(I-[δθ×])R; our Step-3 model uses R'≈Exp(δθ)R=(I+[δθ×])R.
- * With R_GtoC = R_ItoC R_GtoI that implies δθ_C_ours ≈ -R_ItoC δθ_I.
- * Extrinsics are treated as fixed (Step 5 can add calib columns).
- */
-Eigen::Matrix<double, 2, 6> chain_camera_H_to_imu(const Eigen::Matrix<double, 2, 6> &H_cam, const std::shared_ptr<PoseJPL> &clone_imu,
-                                                  const std::shared_ptr<PoseJPL> &calib) {
-  const Eigen::Matrix3d R_ItoC = calib->Rot();
-  const Eigen::Matrix3d R_GtoI = clone_imu->Rot();
-  const Eigen::Vector3d lever_I = R_ItoC.transpose() * calib->pos(); // R_ItoC^T p_IinC
-
-  Eigen::Matrix<double, 2, 3> H_th = H_cam.block<2, 3>(0, 0);
-  Eigen::Matrix<double, 2, 3> H_p = H_cam.block<2, 3>(0, 3);
-
-  Eigen::Matrix<double, 2, 6> H_imu = Eigen::Matrix<double, 2, 6>::Zero();
-  H_imu.block<2, 3>(0, 0) = H_th * (-R_ItoC) + H_p * (R_GtoI.transpose() * skew_x(lever_I));
-  H_imu.block<2, 3>(0, 3) = H_p;
-  return H_imu;
-}
 
 /**
  * @brief Build PO residual and Hx for one feature (standard EKF form r ≈ Hx δx + n).
  *
  * Unlike MSCKF we never triangulate a world point and never nullspace-project Hf.
  * Flow:
- *  - Flatten every (camera, time) observation into a view list
+ *  - Flatten every (camera, time) observation into a view list (per-view calib)
  *  - Pick base views (j,k) with largest parallax θ
- *  - For each view i: predict pixel from p_i^(PO), residual = meas - pred
- *  - Jacobian: camera-pose H for roles i,j,k → IMU clones → pixel via distort Jacobian
- * If i coincides with j or k, both role blocks land on the same clone and are summed.
+ *  - Residual from current IMU⊕calib camera poses
+ *  - Jacobians at FEJ clones when do_fej (calib uses current, matching UpdaterHelper)
+ *  - Chain camera H → IMU clones (+ calib columns if do_calib_camera_pose)
+ * If i coincides with j or k, both role blocks land on the same state and are summed.
  *
  * @return false if the feature should be skipped (too few views, bad geometry, non-finite)
  */
 bool build_po_linear_system(std::shared_ptr<State> state, const std::shared_ptr<Feature> &feature, Eigen::MatrixXd &H_x, Eigen::VectorXd &res,
                             std::vector<std::shared_ptr<Type>> &Hx_order) {
 
-  // One PoView per observation: bearing + pixel + camera pose built from that time's IMU clone
+  const bool use_fej = state->_options.do_fej;
+  const bool calib_extrinsics = state->_options.do_calib_camera_pose;
+
+  // One PoView per observation: bearing + pixel + camera pose from that time's IMU clone ⊕ that cam's calib
   std::vector<PoView> views;
   for (const auto &pair : feature->timestamps) {
     const size_t cam_id = pair.first;
     if (state->_calib_IMUtoCAM.find(cam_id) == state->_calib_IMUtoCAM.end())
+      return false;
+    if (state->_cam_intrinsics_cameras.find(cam_id) == state->_cam_intrinsics_cameras.end())
       return false;
     auto calib = state->_calib_IMUtoCAM.at(cam_id);
     for (size_t m = 0; m < pair.second.size(); m++) {
@@ -118,7 +97,16 @@ bool build_po_linear_system(std::shared_ptr<State> state, const std::shared_ptr<
       v.timestamp = t;
       v.clone_imu = state->_clones_IMU.at(t);
       v.calib_imu_to_cam = calib;
-      v.cam_pose = camera_pose_from_imu(v.clone_imu, calib);
+      v.R_ItoC = calib->Rot();
+      v.p_IinC = calib->pos();
+      v.cam_pose = PoseOnlyGeometry::compose_camera_pose(v.clone_imu->Rot(), v.clone_imu->pos(), v.R_ItoC, v.p_IinC);
+      if (use_fej) {
+        v.R_GtoI_lin = v.clone_imu->Rot_fej();
+        v.cam_pose_lin = PoseOnlyGeometry::compose_camera_pose(v.R_GtoI_lin, v.clone_imu->pos_fej(), v.R_ItoC, v.p_IinC);
+      } else {
+        v.R_GtoI_lin = v.clone_imu->Rot();
+        v.cam_pose_lin = v.cam_pose;
+      }
       Eigen::VectorXf uvn = feature->uvs_norm.at(cam_id).at(m);
       v.bearing << uvn(0), uvn(1), 1.0;
       Eigen::VectorXf uv = feature->uvs.at(cam_id).at(m);
@@ -130,29 +118,41 @@ bool build_po_linear_system(std::shared_ptr<State> state, const std::shared_ptr<
     return false;
 
   std::vector<Eigen::Vector3d> bearings;
-  std::vector<PoseOnlyGeometry::CameraPose> poses;
+  std::vector<PoseOnlyGeometry::CameraPose> poses_cur;
+  std::vector<PoseOnlyGeometry::CameraPose> poses_lin;
   bearings.reserve(views.size());
-  poses.reserve(views.size());
+  poses_cur.reserve(views.size());
+  poses_lin.reserve(views.size());
   for (const auto &v : views) {
     bearings.push_back(v.bearing);
-    poses.push_back(v.cam_pose);
+    poses_cur.push_back(v.cam_pose);
+    poses_lin.push_back(v.cam_pose_lin);
   }
 
-  // Virtual stereo pair for this track (paper eq. 8)
+  // Virtual stereo pair for this track (paper eq. 8) — use current geometry
   int base_j = 0, base_k = 1;
   double best_theta = 0;
-  if (!PoseOnlyGeometry::select_base_views(bearings, poses, base_j, base_k, &best_theta) || best_theta < 1e-8)
+  if (!PoseOnlyGeometry::select_base_views(bearings, poses_cur, base_j, base_k, &best_theta) || best_theta < 1e-8)
     return false;
 
-  // Columns of Hx are unique IMU clones (state variables the EKF can correct)
+  // Hx columns: per-cam calib (optional) then unique IMU clones — mirrors UpdaterHelper ordering intent
   std::unordered_map<std::shared_ptr<Type>, size_t> map_hx;
   Hx_order.clear();
   int total_hx = 0;
-  for (const auto &v : views) {
-    if (map_hx.find(v.clone_imu) == map_hx.end()) {
-      map_hx.insert({v.clone_imu, total_hx});
-      Hx_order.push_back(v.clone_imu);
-      total_hx += (int)v.clone_imu->size();
+  for (const auto &pair : feature->timestamps) {
+    auto calib = state->_calib_IMUtoCAM.at(pair.first);
+    if (calib_extrinsics && map_hx.find(calib) == map_hx.end()) {
+      map_hx.insert({calib, total_hx});
+      Hx_order.push_back(calib);
+      total_hx += (int)calib->size();
+    }
+    for (size_t m = 0; m < pair.second.size(); m++) {
+      auto clone = state->_clones_IMU.at(pair.second.at(m));
+      if (map_hx.find(clone) == map_hx.end()) {
+        map_hx.insert({clone, total_hx});
+        Hx_order.push_back(clone);
+        total_hx += (int)clone->size();
+      }
     }
   }
 
@@ -160,37 +160,43 @@ bool build_po_linear_system(std::shared_ptr<State> state, const std::shared_ptr<
   res = Eigen::VectorXd::Zero(2 * n_meas);
   H_x = Eigen::MatrixXd::Zero(2 * n_meas, total_hx);
 
-  const auto &pose_j = poses[base_j];
-  const auto &pose_k = poses[base_k];
+  const auto &pose_j_cur = poses_cur[base_j];
+  const auto &pose_k_cur = poses_cur[base_k];
+  const auto &pose_j_lin = poses_lin[base_j];
+  const auto &pose_k_lin = poses_lin[base_k];
   const Eigen::Vector3d &bearing_j = bearings[base_j];
   const Eigen::Vector3d &bearing_k = bearings[base_k];
 
   for (int i = 0; i < n_meas; i++) {
-    // Predict where the feature should appear in view i using only poses + base bearings
-    Eigen::Vector3d p_po = PoseOnlyGeometry::feature_in_camera_po(bearing_j, pose_j, bearing_k, pose_k, poses[i]);
+    // Residual at current estimate
+    Eigen::Vector3d p_po = PoseOnlyGeometry::feature_in_camera_po(bearing_j, pose_j_cur, bearing_k, pose_k_cur, poses_cur[i]);
     if (std::abs(p_po(2)) < 1e-6)
       return false;
 
     Eigen::Vector2d z_hat = PoseOnlyGeometry::project_normalized(p_po);
-
-    // Match OpenVINS MSCKF residual space: raw pixels, measurement minus prediction
     Eigen::MatrixXd dz_dzn, dz_dzeta;
     state->_cam_intrinsics_cameras.at(views[i].cam_id)->compute_distort_jacobian(z_hat, dz_dzn, dz_dzeta);
     Eigen::Vector2d uv_dist = state->_cam_intrinsics_cameras.at(views[i].cam_id)->distort_d(z_hat);
     res.segment<2>(2 * i) = views[i].uv_ms - uv_dist;
 
+    // Jacobians at FEJ (or current) linearization poses
+    auto Jcam = PoseOnlyGeometry::residual_jacobian_poses(bearing_j, pose_j_lin, bearing_k, pose_k_lin, poses_lin[i], bearings[i]);
     // PoseOnlyGeometry returns ∂(z_hat - z_norm)/∂cam; we need ∂(z_meas - z_hat)/∂cam = -that
-    auto Jcam = PoseOnlyGeometry::residual_jacobian_poses(bearing_j, pose_j, bearing_k, pose_k, poses[i], bearings[i]);
     Eigen::Matrix<double, 2, 6> H_cam_i = -Jcam.H_i;
     Eigen::Matrix<double, 2, 6> H_cam_j = -Jcam.H_j;
     Eigen::Matrix<double, 2, 6> H_cam_k = -Jcam.H_k;
 
-    // Add each role's sensitivity onto the corresponding IMU clone column (may be the same clone)
     auto accumulate = [&](int view_idx, const Eigen::Matrix<double, 2, 6> &H_cam_role) {
-      Eigen::Matrix<double, 2, 6> H_imu = chain_camera_H_to_imu(H_cam_role, views[view_idx].clone_imu, views[view_idx].calib_imu_to_cam);
-      Eigen::MatrixXd H_pix = dz_dzn * H_imu;
-      size_t col = map_hx[views[view_idx].clone_imu];
-      H_x.block(2 * i, col, 2, 6) += H_pix;
+      const PoView &v = views[view_idx];
+      Eigen::Matrix<double, 2, 6> H_imu =
+          PoseOnlyGeometry::chain_camera_H_to_imu_jpl(H_cam_role, v.R_GtoI_lin, v.R_ItoC, v.p_IinC);
+      H_x.block(2 * i, map_hx[v.clone_imu], 2, 6) += dz_dzn * H_imu;
+
+      if (calib_extrinsics) {
+        Eigen::Matrix<double, 2, 6> H_calib =
+            PoseOnlyGeometry::chain_camera_H_to_calib_jpl(H_cam_role, v.R_GtoI_lin, v.R_ItoC, v.p_IinC);
+        H_x.block(2 * i, map_hx[v.calib_imu_to_cam], 2, 6) += dz_dzn * H_calib;
+      }
     };
 
     accumulate(i, H_cam_i);

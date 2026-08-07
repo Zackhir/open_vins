@@ -176,3 +176,11 @@ install(TARGETS test_pose_only_jacobians
         RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
+add_executable(test_pose_only_chain src/test_pose_only_chain.cpp)
+target_link_libraries(test_pose_only_chain ov_msckf_lib ${thirdparty_libraries})
+install(TARGETS test_pose_only_chain
+        ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+        LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+        RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+

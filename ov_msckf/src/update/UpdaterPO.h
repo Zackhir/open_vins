@@ -49,8 +49,9 @@ class State;
  *  3) Chi-square outlier gate
  *  4) Stack / compress / EKFUpdate
  *
- * Camera poses = IMU clone pose ⊕ calib_IMUtoCAM. Hx is w.r.t. IMU clones only;
- * online extrinsics/FEJ Jacobian polish is left for a later step.
+ * Camera poses = IMU clone pose ⊕ calib_IMUtoCAM (per camera id).
+ * Hx columns: IMU clones; plus calib_IMUtoCAM when StateOptions::do_calib_camera_pose.
+ * When StateOptions::do_fej, Jacobians use clone FEJ poses (residual stays current).
  *
  * Math helpers live in PoseOnlyGeometry (paper eqs. 8, 10–11, 28–38).
  */

@@ -257,3 +257,39 @@ PoseOnlyGeometry::ResidualPoseJacobians PoseOnlyGeometry::residual_jacobian_pose
   J.H_i = dpi_dp * Dp_Di;
   return J;
 }
+
+PoseOnlyGeometry::CameraPose PoseOnlyGeometry::compose_camera_pose(const Eigen::Matrix3d &R_GtoI, const Eigen::Vector3d &p_IinG,
+                                                                   const Eigen::Matrix3d &R_ItoC, const Eigen::Vector3d &p_IinC) {
+  CameraPose pose;
+  pose.R_GtoC = R_ItoC * R_GtoI;
+  pose.p_CinG = p_IinG - pose.R_GtoC.transpose() * p_IinC;
+  return pose;
+}
+
+Eigen::Matrix<double, 2, 6> PoseOnlyGeometry::chain_camera_H_to_imu_jpl(const Eigen::Matrix<double, 2, 6> &H_cam, const Eigen::Matrix3d &R_GtoI,
+                                                                       const Eigen::Matrix3d &R_ItoC, const Eigen::Vector3d &p_IinC) {
+  // Camera: R'≈Exp(δθ)R; JPL IMU: R'≈Exp(-δθ)R ⇒ with R_GtoC=R_ItoC R_GtoI, δθ_cam ≈ -R_ItoC δθ_I
+  const Eigen::Vector3d lever_I = R_ItoC.transpose() * p_IinC;
+  Eigen::Matrix<double, 2, 3> H_th = H_cam.block<2, 3>(0, 0);
+  Eigen::Matrix<double, 2, 3> H_p = H_cam.block<2, 3>(0, 3);
+
+  Eigen::Matrix<double, 2, 6> H_imu = Eigen::Matrix<double, 2, 6>::Zero();
+  H_imu.block<2, 3>(0, 0) = H_th * (-R_ItoC) + H_p * (R_GtoI.transpose() * skew_x(lever_I));
+  H_imu.block<2, 3>(0, 3) = H_p;
+  return H_imu;
+}
+
+Eigen::Matrix<double, 2, 6> PoseOnlyGeometry::chain_camera_H_to_calib_jpl(const Eigen::Matrix<double, 2, 6> &H_cam,
+                                                                         const Eigen::Matrix3d &R_GtoI, const Eigen::Matrix3d &R_ItoC,
+                                                                         const Eigen::Vector3d &p_IinC) {
+  // R_GtoC = R_ItoC R_GtoI; JPL calib: R_ItoC'≈Exp(-δθ_c)R_ItoC ⇒ δθ_cam ≈ -δθ_c
+  // p_CinG = p_IinG - R_GtoC^T p_IinC
+  const Eigen::Matrix3d R_GtoC = R_ItoC * R_GtoI;
+  Eigen::Matrix<double, 2, 3> H_th = H_cam.block<2, 3>(0, 0);
+  Eigen::Matrix<double, 2, 3> H_p = H_cam.block<2, 3>(0, 3);
+
+  Eigen::Matrix<double, 2, 6> H_calib = Eigen::Matrix<double, 2, 6>::Zero();
+  H_calib.block<2, 3>(0, 0) = -H_th + H_p * (R_GtoC.transpose() * skew_x(p_IinC));
+  H_calib.block<2, 3>(0, 3) = H_p * (-R_GtoC.transpose());
+  return H_calib;
+}
