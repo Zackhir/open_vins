@@ -8,7 +8,9 @@
     <!-- mono or stereo and what ros bag to play -->
     <arg name="max_cameras" default="2" />
     <arg name="use_stereo"  default="true" />
+    <arg name="use_pose_only_update" default="false" /> <!-- classical MSCKF vs PO-MSCKF visual update -->
     <arg name="bag_start"   default="0" /> <!-- v1-2: 0, mh1: 40, mh2: 35, mh3: 17.5, mh4-5: 15 -->
+    <arg name="bag_durr"    default="-1" /> <!-- seconds of bag to process; -1 = full -->
     <arg name="dataset"     default="dataset-room1_512_16" /> <!-- V1_01_easy, V1_02_medium, V1_03_difficult, V2_02_medium, dataset-room1_512_16 -->
     <!-- <arg name="bag"         default="/media/patrick/RPNG FLASH 3/$(arg config)/$(arg dataset).bag" /> -->
     <arg name="bag"         default="/home/patrick/datasets/$(arg config)/$(arg dataset).bag" />
@@ -31,7 +33,7 @@
         <!-- bag parameters -->
         <param name="path_bag"                 type="str"    value="$(arg bag)" />
         <param name="bag_start"                type="double" value="$(arg bag_start)" />
-        <param name="bag_durr"                 type="int"    value="-1" />
+        <param name="bag_durr"                 type="int"    value="$(arg bag_durr)" />
 
         <!-- master configuration object -->
         <param name="verbosity"                 type="str"    value="$(arg verbosity)" />
@@ -40,6 +42,7 @@
         <!-- world/filter parameters -->
         <param name="use_stereo"                type="bool"   value="$(arg use_stereo)" />
         <param name="max_cameras"               type="int"    value="$(arg max_cameras)" />
+        <param name="use_pose_only_update"      type="bool"   value="$(arg use_pose_only_update)" />
 
         <!-- timing statistics recording -->
         <param name="record_timing_information" type="bool"   value="$(arg dotime)" />

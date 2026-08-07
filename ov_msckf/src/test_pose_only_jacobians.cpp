@@ -149,6 +149,37 @@ static void check_shared_pose_i_equals_j(const std::string &name, const PoseOnly
   EXPECT_TRUE(ek < tol);
 }
 
+static void check_bearing_jacobians(const char *name, const PoseOnlyGeometry::CameraPose &pose_j,
+                                    const PoseOnlyGeometry::CameraPose &pose_k, const PoseOnlyGeometry::CameraPose &pose_i,
+                                    const Eigen::Vector3d &p_FinG, double tol) {
+  Eigen::Vector3d zj = project_bearing(pose_j, p_FinG);
+  Eigen::Vector3d zk = project_bearing(pose_k, p_FinG);
+  const double eps = 1e-7;
+
+  Eigen::Matrix<double, 2, 2> DH_Dbj, DH_Dbk;
+  PoseOnlyGeometry::prediction_jacobian_bearings(zj, pose_j, zk, pose_k, pose_i, DH_Dbj, DH_Dbk);
+
+  auto predict = [&](const Eigen::Vector3d &bj, const Eigen::Vector3d &bk) {
+    Eigen::Vector3d p_po = PoseOnlyGeometry::feature_in_camera_po(bj, pose_j, bk, pose_k, pose_i);
+    return PoseOnlyGeometry::project_normalized(p_po);
+  };
+
+  Eigen::Matrix<double, 2, 2> Hbj_fd = Eigen::Matrix<double, 2, 2>::Zero();
+  Eigen::Matrix<double, 2, 2> Hbk_fd = Eigen::Matrix<double, 2, 2>::Zero();
+  for (int c = 0; c < 2; c++) {
+    Eigen::Vector3d d = Eigen::Vector3d::Zero();
+    d(c) = eps;
+    Hbj_fd.col(c) = (predict(zj + d, zk) - predict(zj - d, zk)) / (2.0 * eps);
+    Hbk_fd.col(c) = (predict(zj, zk + d) - predict(zj, zk - d)) / (2.0 * eps);
+  }
+
+  double ej = (DH_Dbj - Hbj_fd).cwiseAbs().maxCoeff();
+  double ek = (DH_Dbk - Hbk_fd).cwiseAbs().maxCoeff();
+  std::cout << "bearing_jac [" << name << "] max|Dbj-fd|=" << ej << " max|Dbk-fd|=" << ek << std::endl;
+  EXPECT_TRUE(ej < tol);
+  EXPECT_TRUE(ek < tol);
+}
+
 int main() {
   const double tol = 1e-5; // slightly loose vs 1e-6 for central FD / conditioning
 
@@ -180,6 +211,14 @@ int main() {
     auto pose_j = make_pose(rot_y(0.02), Eigen::Vector3d(0.0, 0.0, 0.0));
     auto pose_k = make_pose(rot_y(-0.01), Eigen::Vector3d(0.7, 0.0, 0.0));
     check_jacobians("i_equals_k_symbolic_slots", pose_j, pose_k, pose_k, Eigen::Vector3d(0.0, 0.2, 4.5), tol);
+  }
+
+  // Case 5: ∂π(p_PO)/∂bearing for noise whitening
+  {
+    auto pose_j = make_pose(Eigen::Matrix3d::Identity(), Eigen::Vector3d(0.0, 0.0, 0.0));
+    auto pose_k = make_pose(Eigen::Matrix3d::Identity(), Eigen::Vector3d(0.8, 0.0, 0.0));
+    auto pose_i = make_pose(Eigen::Matrix3d::Identity(), Eigen::Vector3d(0.3, 0.2, 0.0));
+    check_bearing_jacobians("noise_G_bearings", pose_j, pose_k, pose_i, Eigen::Vector3d(0.1, -0.15, 4.0), tol);
   }
 
   if (g_failed == 0) {

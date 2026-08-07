@@ -18,6 +18,9 @@
     <arg name="num_pts"     default="100" />
     <arg name="max_cameras" default="2" />
     <arg name="use_stereo"  default="true" />
+    <arg name="use_pose_only_update" default="false" /> <!-- classical MSCKF vs PO-MSCKF visual update -->
+    <arg name="up_msckf_sigma_px" default="1.0" />
+    <arg name="up_msckf_chi2_multipler" default="1.0" />
 
     <arg name="feat_dist_min" default="5.0" />
     <arg name="feat_dist_max" default="7.0" />
@@ -29,6 +32,8 @@
     <!-- if we should perturb the initial state values (i.e. calibration) -->
     <arg name="sim_do_perturbation"             default="true" />
     <arg name="sim_do_calibration"              default="true" />
+    <arg name="sim_do_calib_cam_extrinsics"     default="$(arg sim_do_calibration)" />
+    <arg name="sim_do_calib_cam_intrinsics"     default="$(arg sim_do_calibration)" />
     <arg name="sim_do_calib_imu_intrinsics"     default="true" />
     <arg name="sim_do_calib_g_sensitivity"      default="true" />
 
@@ -78,8 +83,8 @@
 
         <!-- world/filter parameters -->
         <param name="use_fej"                   type="bool"   value="$(arg fej)" />
-        <param name="calib_cam_extrinsics"      type="bool"   value="$(arg sim_do_calibration)" />
-        <param name="calib_cam_intrinsics"      type="bool"   value="$(arg sim_do_calibration)" />
+        <param name="calib_cam_extrinsics"      type="bool"   value="$(arg sim_do_calib_cam_extrinsics)" />
+        <param name="calib_cam_intrinsics"      type="bool"   value="$(arg sim_do_calib_cam_intrinsics)" />
         <param name="calib_cam_timeoffset"      type="bool"   value="$(arg sim_do_calibration)" />
         <param name="calib_imu_intrinsics"      type="bool"   value="$(arg sim_do_calib_imu_intrinsics)" />
         <param name="calib_imu_g_sensitivity"   type="bool"   value="$(arg sim_do_calib_g_sensitivity)" />
@@ -87,12 +92,17 @@
         <param name="max_slam"                  type="int"    value="$(arg num_slam)" />
         <param name="use_stereo"                type="bool"   value="$(arg use_stereo)" />
         <param name="max_cameras"               type="int"    value="$(arg max_cameras)" />
+        <param name="use_pose_only_update"      type="bool"   value="$(arg use_pose_only_update)" />
         <param name="feat_rep_msckf"            type="string" value="$(arg feat_rep)" />
         <param name="feat_rep_slam"             type="string" value="$(arg feat_rep)" />
         <param name="feat_rep_aruco"            type="string" value="$(arg feat_rep)" />
 
         <!-- tracker/extractor properties -->
         <param name="num_pts"                type="int"    value="$(arg num_pts)" />
+
+        <!-- MSCKF / PO updater noise + gating (ROS overrides YAML) -->
+        <param name="up_msckf_sigma_px"         type="double" value="$(arg up_msckf_sigma_px)" />
+        <param name="up_msckf_chi2_multipler"   type="double" value="$(arg up_msckf_chi2_multipler)" />
 
     </node>
 

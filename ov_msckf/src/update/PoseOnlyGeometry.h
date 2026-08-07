@@ -116,6 +116,14 @@ public:
                                                        const Eigen::Vector3d &z_i);
 
   /**
+   * @brief Jacobian of normalized prediction π(p_i(PO)) w.r.t. base bearings' first two components.
+   * Used to build a non-diagonal measurement noise that accounts for shared z_j, z_k noise.
+   */
+  static void prediction_jacobian_bearings(const Eigen::Vector3d &bearing_j, const CameraPose &pose_j, const Eigen::Vector3d &bearing_k,
+                                           const CameraPose &pose_k, const CameraPose &pose_i, Eigen::Matrix<double, 2, 2> &DH_Dbj,
+                                           Eigen::Matrix<double, 2, 2> &DH_Dbk);
+
+  /**
    * @brief Compose camera pose from IMU pose and IMU→CAM extrinsics (OpenVINS convention).
    * R_GtoC = R_ItoC R_GtoI,  p_CinG = p_IinG - R_GtoC^T p_IinC
    */
