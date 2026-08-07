@@ -18,6 +18,7 @@
     <arg name="num_pts"     default="100" />
     <arg name="max_cameras" default="2" />
     <arg name="use_stereo"  default="true" />
+    <arg name="use_pose_only_update" default="false" /> <!-- classical MSCKF vs PO-MSCKF visual update -->
 
     <arg name="feat_dist_min" default="5.0" />
     <arg name="feat_dist_max" default="7.0" />
@@ -87,6 +88,7 @@
         <param name="max_slam"                  type="int"    value="$(arg num_slam)" />
         <param name="use_stereo"                type="bool"   value="$(arg use_stereo)" />
         <param name="max_cameras"               type="int"    value="$(arg max_cameras)" />
+        <param name="use_pose_only_update"      type="bool"   value="$(arg use_pose_only_update)" />
         <param name="feat_rep_msckf"            type="string" value="$(arg feat_rep)" />
         <param name="feat_rep_slam"             type="string" value="$(arg feat_rep)" />
         <param name="feat_rep_aruco"            type="string" value="$(arg feat_rep)" />
