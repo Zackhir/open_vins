@@ -258,6 +258,58 @@ PoseOnlyGeometry::ResidualPoseJacobians PoseOnlyGeometry::residual_jacobian_pose
   return J;
 }
 
+void PoseOnlyGeometry::prediction_jacobian_bearings(const Eigen::Vector3d &bearing_j, const CameraPose &pose_j,
+                                                    const Eigen::Vector3d &bearing_k, const CameraPose &pose_k, const CameraPose &pose_i,
+                                                    Eigen::Matrix<double, 2, 2> &DH_Dbj, Eigen::Matrix<double, 2, 2> &DH_Dbk) {
+  const Eigen::Vector3d p_j = normalize_bearing(bearing_j);
+  const Eigen::Vector3d p_k = normalize_bearing(bearing_k);
+
+  Eigen::Matrix3d R_i_j, R_k_j;
+  Eigen::Vector3d t_i_j, t_k_j;
+  relative_pose(pose_j, pose_i, R_i_j, t_i_j);
+  relative_pose(pose_j, pose_k, R_k_j, t_k_j);
+
+  const Eigen::Vector3d v = R_i_j * p_j;
+  const Eigen::Vector3d w = R_k_j * p_j;
+  const Eigen::Vector3d u_a = t_k_j.cross(p_k);
+  const Eigen::Vector3d u_b = p_k.cross(w);
+  const double a = u_a.norm();
+  const double b = u_b.norm();
+  DH_Dbj.setZero();
+  DH_Dbk.setZero();
+  if (a < 1e-12 || b < 1e-12)
+    return;
+
+  const Eigen::Vector3d da_dua = dnorm_du(u_a);
+  const Eigen::Vector3d db_dub = dnorm_du(u_b);
+
+  // p_PO = a v + b t_i_j
+  // ∂p_PO/∂p_j (3×3): a is independent of p_j; v = R_i_j p_j; b depends on p_j via w
+  // ∂u_b/∂p_j = [p_k×] R_k_j
+  const Eigen::Matrix3d du_b_dp_j = skew_x(p_k) * R_k_j;
+  const Eigen::Matrix<double, 1, 3> db_dp_j = db_dub.transpose() * du_b_dp_j;
+  Eigen::Matrix3d Dp_Dpj = a * R_i_j + t_i_j * db_dp_j;
+
+  // ∂p_PO/∂p_k: v,t fixed w.r.t p_k; a depends on p_k; b depends on p_k
+  // u_a = [t_k_j×] p_k ⇒ ∂u_a/∂p_k = [t_k_j×]
+  const Eigen::Matrix<double, 1, 3> da_dp_k = da_dua.transpose() * skew_x(t_k_j);
+  // u_b = [p_k×] w = -[w×] p_k ⇒ ∂u_b/∂p_k = -[w×]
+  const Eigen::Matrix<double, 1, 3> db_dp_k = db_dub.transpose() * (-skew_x(w));
+  Eigen::Matrix3d Dp_Dpk = v * da_dp_k + t_i_j * db_dp_k;
+
+  Eigen::Vector3d p_po = a * v + b * t_i_j;
+  Eigen::Matrix<double, 2, 3> dpi_dp = project_jacobian(p_po);
+
+  // Bearing error is on first two components (homogeneous z=1 fixed)
+  Eigen::Matrix<double, 3, 2> Ep;
+  Ep.setZero();
+  Ep(0, 0) = 1.0;
+  Ep(1, 1) = 1.0;
+
+  DH_Dbj = dpi_dp * Dp_Dpj * Ep;
+  DH_Dbk = dpi_dp * Dp_Dpk * Ep;
+}
+
 PoseOnlyGeometry::CameraPose PoseOnlyGeometry::compose_camera_pose(const Eigen::Matrix3d &R_GtoI, const Eigen::Vector3d &p_IinG,
                                                                    const Eigen::Matrix3d &R_ItoC, const Eigen::Vector3d &p_IinC) {
   CameraPose pose;

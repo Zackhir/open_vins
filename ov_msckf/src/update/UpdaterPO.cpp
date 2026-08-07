@@ -28,6 +28,7 @@
 #include "state/State.h"
 #include "state/StateHelper.h"
 #include "types/PoseJPL.h"
+#include "types/Vec.h"
 #include "utils/colors.h"
 #include "utils/print.h"
 #include "utils/quat_ops.h"
@@ -57,10 +58,11 @@ struct PoView {
   Eigen::Vector3d p_IinC = Eigen::Vector3d::Zero();
   std::shared_ptr<PoseJPL> clone_imu;
   std::shared_ptr<PoseJPL> calib_imu_to_cam;
+  std::shared_ptr<Vec> cam_intrinsics;
 };
 
 /**
- * @brief Build PO residual and Hx for one feature (standard EKF form r ≈ Hx δx + n).
+ * @brief Build PO residual and Hx for one feature, whitened to unit isotropic noise.
  *
  * Unlike MSCKF we never triangulate a world point and never nullspace-project Hf.
  * Flow:
@@ -69,15 +71,18 @@ struct PoView {
  *  - Residual from current IMU⊕calib camera poses
  *  - Jacobians at FEJ clones when do_fej (calib uses current, matching UpdaterHelper)
  *  - Chain camera H → IMU clones (+ calib columns if do_calib_camera_pose)
+ *  - Build pixel noise Jacobian G = ∂r/∂{all uv}: own-view I plus shared base bearings z_j,z_k
+ *    via ∂π(p_PO)/∂bearing, then whiten with R = σ² G Gᵀ so stacked update may use R = I
  * If i coincides with j or k, both role blocks land on the same state and are summed.
  *
  * @return false if the feature should be skipped (too few views, bad geometry, non-finite)
  */
 bool build_po_linear_system(std::shared_ptr<State> state, const std::shared_ptr<Feature> &feature, Eigen::MatrixXd &H_x, Eigen::VectorXd &res,
-                            std::vector<std::shared_ptr<Type>> &Hx_order) {
+                            std::vector<std::shared_ptr<Type>> &Hx_order, double sigma_pix_sq) {
 
   const bool use_fej = state->_options.do_fej;
   const bool calib_extrinsics = state->_options.do_calib_camera_pose;
+  const bool calib_intrinsics = state->_options.do_calib_camera_intrinsics;
 
   // One PoView per observation: bearing + pixel + camera pose from that time's IMU clone ⊕ that cam's calib
   std::vector<PoView> views;
@@ -87,7 +92,10 @@ bool build_po_linear_system(std::shared_ptr<State> state, const std::shared_ptr<
       return false;
     if (state->_cam_intrinsics_cameras.find(cam_id) == state->_cam_intrinsics_cameras.end())
       return false;
+    if (state->_cam_intrinsics.find(cam_id) == state->_cam_intrinsics.end())
+      return false;
     auto calib = state->_calib_IMUtoCAM.at(cam_id);
+    auto intrins = state->_cam_intrinsics.at(cam_id);
     for (size_t m = 0; m < pair.second.size(); m++) {
       double t = pair.second.at(m);
       if (state->_clones_IMU.find(t) == state->_clones_IMU.end())
@@ -97,6 +105,7 @@ bool build_po_linear_system(std::shared_ptr<State> state, const std::shared_ptr<
       v.timestamp = t;
       v.clone_imu = state->_clones_IMU.at(t);
       v.calib_imu_to_cam = calib;
+      v.cam_intrinsics = intrins;
       v.R_ItoC = calib->Rot();
       v.p_IinC = calib->pos();
       v.cam_pose = PoseOnlyGeometry::compose_camera_pose(v.clone_imu->Rot(), v.clone_imu->pos(), v.R_ItoC, v.p_IinC);
@@ -114,7 +123,10 @@ bool build_po_linear_system(std::shared_ptr<State> state, const std::shared_ptr<
       views.push_back(v);
     }
   }
-  if (views.size() < 2)
+  // Need j, k, and at least one non-base view for a PO residual (paper D(j,k) includes
+  // i=k, but that residual is algebraically ~0 at the linearization and makes ∂r/∂uv_k
+  // near-singular — we only residualize i ∉ {j,k}).
+  if (views.size() < 3)
     return false;
 
   std::vector<Eigen::Vector3d> bearings;
@@ -148,16 +160,22 @@ bool build_po_linear_system(std::shared_ptr<State> state, const std::shared_ptr<
       return false;
   }
 
-  // Hx columns: per-cam calib (optional) then unique IMU clones — mirrors UpdaterHelper ordering intent
+  // Hx columns: per-cam extrinsics / intrinsics (optional) then unique IMU clones — mirrors UpdaterHelper
   std::unordered_map<std::shared_ptr<Type>, size_t> map_hx;
   Hx_order.clear();
   int total_hx = 0;
   for (const auto &pair : feature->timestamps) {
     auto calib = state->_calib_IMUtoCAM.at(pair.first);
+    auto intrins = state->_cam_intrinsics.at(pair.first);
     if (calib_extrinsics && map_hx.find(calib) == map_hx.end()) {
       map_hx.insert({calib, total_hx});
       Hx_order.push_back(calib);
       total_hx += (int)calib->size();
+    }
+    if (calib_intrinsics && map_hx.find(intrins) == map_hx.end()) {
+      map_hx.insert({intrins, total_hx});
+      Hx_order.push_back(intrins);
+      total_hx += (int)intrins->size();
     }
     for (size_t m = 0; m < pair.second.size(); m++) {
       auto clone = state->_clones_IMU.at(pair.second.at(m));
@@ -170,9 +188,11 @@ bool build_po_linear_system(std::shared_ptr<State> state, const std::shared_ptr<
   }
 
   const int n_meas = (int)views.size();
-  // At most one skipped row (i == base_j); allocate full then conservativeResize
+  // Skip both base views; allocate full then conservativeResize
   res = Eigen::VectorXd::Zero(2 * n_meas);
   H_x = Eigen::MatrixXd::Zero(2 * n_meas, total_hx);
+  // G = ∂r/∂uv for every view in the track (shared z_j,z_k couple the rows)
+  Eigen::MatrixXd G = Eigen::MatrixXd::Zero(2 * n_meas, 2 * n_meas);
   int ct_row = 0;
 
   const auto &pose_j_cur = poses_cur[base_j];
@@ -182,9 +202,24 @@ bool build_po_linear_system(std::shared_ptr<State> state, const std::shared_ptr<
   const Eigen::Vector3d &bearing_j = bearings[base_j];
   const Eigen::Vector3d &bearing_k = bearings[base_k];
 
+  // ∂bearing/∂uv ≈ (∂distort/∂zn)^{-1} at the measured normalized point
+  auto bearing_from_uv_jacobian = [&](int view_idx) -> Eigen::Matrix2d {
+    Eigen::MatrixXd dz_dzn, dz_dzeta;
+    Eigen::Vector2d zn = bearings[view_idx].head<2>();
+    state->_cam_intrinsics_cameras.at(views[view_idx].cam_id)->compute_distort_jacobian(zn, dz_dzn, dz_dzeta);
+    Eigen::Matrix2d J = dz_dzn.topLeftCorner<2, 2>();
+    Eigen::FullPivLU<Eigen::Matrix2d> lu(J);
+    if (!lu.isInvertible())
+      return Eigen::Matrix2d::Identity() * 1e-3; // extremely defensive
+    return lu.inverse();
+  };
+  const Eigen::Matrix2d Dbj_Duv = bearing_from_uv_jacobian(base_j);
+  const Eigen::Matrix2d Dbk_Duv = bearing_from_uv_jacobian(base_k);
+
   for (int i = 0; i < n_meas; i++) {
-    // Paper multi-view set D(j,k) uses i ≠ j (eq. 7); i=j is structurally zero and adds no information
-    if (i == base_j)
+    // Skip both base views: i=j is uninformative; i=k has π(p_PO)∥p_k at linearization so r≈0
+    // and G_row≈0 after the noise chain (ill-conditioned whitening / chi²).
+    if (i == base_j || i == base_k)
       continue;
 
     // Residual at current estimate
@@ -223,6 +258,22 @@ bool build_po_linear_system(std::shared_ptr<State> state, const std::shared_ptr<
     accumulate(i, H_cam_i);
     accumulate(base_j, H_cam_j);
     accumulate(base_k, H_cam_k);
+
+    // Intrinsics: h = distort(z_hat; ζ) ⇒ ∂h/∂ζ = dz_dzeta (same as UpdaterHelper)
+    if (calib_intrinsics) {
+      H_x.block(2 * ct_row, map_hx[views[i].cam_intrinsics], 2, views[i].cam_intrinsics->size()) = dz_dzeta;
+    }
+
+    // Noise map: r_i = uv_i - distort(π(p_PO(bj(uv_j), bk(uv_k))))
+    //   ∂r/∂uv_i = I
+    //   ∂r/∂uv_j = -dz_dzn ∂π/∂bj ∂bj/∂uv_j  (and same for k)
+    Eigen::Matrix<double, 2, 2> DH_Dbj, DH_Dbk;
+    PoseOnlyGeometry::prediction_jacobian_bearings(bearing_j, pose_j_lin, bearing_k, pose_k_lin, poses_lin[i], DH_Dbj, DH_Dbk);
+    Eigen::Matrix2d dz_dzn2 = dz_dzn.topLeftCorner<2, 2>();
+    G.block<2, 2>(2 * ct_row, 2 * i) += Eigen::Matrix2d::Identity();
+    G.block<2, 2>(2 * ct_row, 2 * base_j) += -dz_dzn2 * DH_Dbj * Dbj_Duv;
+    G.block<2, 2>(2 * ct_row, 2 * base_k) += -dz_dzn2 * DH_Dbk * Dbk_Duv;
+
     ct_row++;
   }
 
@@ -230,7 +281,27 @@ bool build_po_linear_system(std::shared_ptr<State> state, const std::shared_ptr<
     return false;
   res.conservativeResize(2 * ct_row);
   H_x.conservativeResize(2 * ct_row, total_hx);
+  G.conservativeResize(2 * ct_row, 2 * n_meas);
 
+  if (!res.allFinite() || !H_x.allFinite() || !G.allFinite())
+    return false;
+
+  // Whiten with R = σ² · Q max(Λ, I) Qᵀ where G Gᵀ = Q Λ Qᵀ.
+  // Shared base bearings make some stacked-PO directions nearly noise-free under the
+  // linear model; flooring eigenvalues at σ² prevents those directions from dominating
+  // the update (overconfident P → χ² blackout → IMU drift). After whitening, R_eff = I.
+  Eigen::MatrixXd GG = G * G.transpose();
+  Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eig(GG);
+  if (eig.info() != Eigen::Success)
+    return false;
+  Eigen::VectorXd lam = eig.eigenvalues().cwiseMax(1.0);
+  Eigen::MatrixXd R = sigma_pix_sq * (eig.eigenvectors() * lam.asDiagonal() * eig.eigenvectors().transpose());
+  Eigen::LLT<Eigen::MatrixXd> llt(R);
+  if (llt.info() != Eigen::Success)
+    return false;
+  Eigen::MatrixXd L = llt.matrixL();
+  res = L.triangularView<Eigen::Lower>().solve(res);
+  H_x = L.triangularView<Eigen::Lower>().solve(H_x);
   if (!res.allFinite() || !H_x.allFinite())
     return false;
   return true;
@@ -265,7 +336,7 @@ void UpdaterPO::update(std::shared_ptr<State> state, std::vector<std::shared_ptr
     clonetimes.emplace_back(clone_imu.first);
   }
 
-  // 1. Drop observations without clones; need >= 2 views (PO needs a base pair)
+  // 1. Drop observations without clones; need >= 3 views (base pair + ≥1 residual view)
   auto it0 = feature_vec.begin();
   while (it0 != feature_vec.end()) {
     (*it0)->clean_old_measurements(clonetimes);
@@ -273,7 +344,7 @@ void UpdaterPO::update(std::shared_ptr<State> state, std::vector<std::shared_ptr
     for (const auto &pair : (*it0)->timestamps) {
       ct_meas += (int)(*it0)->timestamps[pair.first].size();
     }
-    if (ct_meas < 2) {
+    if (ct_meas < 3) {
       (*it0)->to_delete = true;
       it0 = feature_vec.erase(it0);
     } else {
@@ -300,6 +371,13 @@ void UpdaterPO::update(std::shared_ptr<State> state, std::vector<std::shared_ptr
   size_t ct_jacob = 0;
   size_t ct_meas = 0;
   size_t ct_features_used = 0;
+  size_t ct_build_fail = 0;
+  size_t ct_chi2_reject = 0;
+  double sum_res_norm_accept = 0.0;
+  double sum_res_norm_reject = 0.0;
+  double sum_chi2_accept = 0.0;
+  double sum_chi2_reject = 0.0;
+  double max_res_norm_accept = 0.0;
 
   // 2. Linearize each feature with PO model; reject outliers with chi2 (same gate idea as MSCKF)
   auto it2 = feature_vec.begin();
@@ -307,17 +385,19 @@ void UpdaterPO::update(std::shared_ptr<State> state, std::vector<std::shared_ptr
     Eigen::MatrixXd H_x;
     Eigen::VectorXd res;
     std::vector<std::shared_ptr<Type>> Hx_order;
-    if (!build_po_linear_system(state, *it2, H_x, res, Hx_order)) {
+    if (!build_po_linear_system(state, *it2, H_x, res, Hx_order, _options.sigma_pix_sq)) {
+      ct_build_fail++;
       (*it2)->to_delete = true;
       it2 = feature_vec.erase(it2);
       continue;
     }
 
-    // Chi2 gate: is this residual plausible given P and pixel noise?
+    // Chi2 gate on whitened residual (effective R = I after bearing-noise whitening)
     Eigen::MatrixXd P_marg = StateHelper::get_marginal_covariance(state, Hx_order);
     Eigen::MatrixXd S = H_x * P_marg * H_x.transpose();
-    S.diagonal() += _options.sigma_pix_sq * Eigen::VectorXd::Ones(S.rows());
+    S.diagonal() += Eigen::VectorXd::Ones(S.rows());
     double chi2 = res.dot(S.llt().solve(res));
+    const double res_norm = res.norm();
 
     double chi2_check;
     if (res.rows() < 500) {
@@ -328,6 +408,9 @@ void UpdaterPO::update(std::shared_ptr<State> state, std::vector<std::shared_ptr
     }
 
     if (chi2 > _options.chi2_multipler * chi2_check) {
+      ct_chi2_reject++;
+      sum_res_norm_reject += res_norm;
+      sum_chi2_reject += chi2;
       (*it2)->to_delete = true;
       it2 = feature_vec.erase(it2);
       continue;
@@ -347,6 +430,9 @@ void UpdaterPO::update(std::shared_ptr<State> state, std::vector<std::shared_ptr
     res_big.block(ct_meas, 0, res.rows(), 1) = res;
     ct_meas += res.rows();
     ct_features_used++;
+    sum_res_norm_accept += res_norm;
+    sum_chi2_accept += chi2;
+    max_res_norm_accept = std::max(max_res_norm_accept, res_norm);
     it2++;
   }
   rT2 = boost::posix_time::microsec_clock::local_time();
@@ -357,7 +443,7 @@ void UpdaterPO::update(std::shared_ptr<State> state, std::vector<std::shared_ptr
   }
 
   if (ct_meas < 1) {
-    PRINT_ALL("[PO-UP]: no features passed gating\n");
+    PRINT_INFO("[PO-UP]: no features passed gating (build_fail=%zu chi2_reject=%zu)\n", ct_build_fail, ct_chi2_reject);
     return;
   }
   assert(ct_meas <= max_meas_size);
@@ -372,10 +458,19 @@ void UpdaterPO::update(std::shared_ptr<State> state, std::vector<std::shared_ptr
   }
   rT3 = boost::posix_time::microsec_clock::local_time();
 
-  Eigen::MatrixXd R_big = _options.sigma_pix_sq * Eigen::MatrixXd::Identity(res_big.rows(), res_big.rows());
+  // Per-feature systems were whitened to unit isotropic noise (R = σ² G Gᵀ → I)
+  Eigen::MatrixXd R_big = Eigen::MatrixXd::Identity(res_big.rows(), res_big.rows());
   StateHelper::EKFUpdate(state, Hx_order_big, Hx_big, res_big, R_big);
   rT4 = boost::posix_time::microsec_clock::local_time();
 
+  const double n_acc = std::max(1.0, (double)ct_features_used);
+  const double n_rej = std::max(1.0, (double)ct_chi2_reject);
+  PRINT_INFO("[PO-UP]: used=%zu build_fail=%zu chi2_reject=%zu | "
+             "res_norm mean_acc=%.2f max_acc=%.2f mean_rej=%.2f | chi2 mean_acc=%.1f mean_rej=%.1f | "
+             "sigma_pix=%.2f chi2_mult=%.2f\n",
+             ct_features_used, ct_build_fail, ct_chi2_reject, sum_res_norm_accept / n_acc, max_res_norm_accept,
+             sum_res_norm_reject / n_rej, sum_chi2_accept / n_acc, sum_chi2_reject / n_rej, _options.sigma_pix,
+             _options.chi2_multipler);
   PRINT_ALL("[PO-UP]: %.4f seconds to clean\n", (rT1 - rT0).total_microseconds() * 1e-6);
   PRINT_ALL("[PO-UP]: %.4f seconds create system (%d features used)\n", (rT2 - rT1).total_microseconds() * 1e-6, (int)ct_features_used);
   PRINT_ALL("[PO-UP]: %.4f seconds compress system\n", (rT3 - rT2).total_microseconds() * 1e-6);
