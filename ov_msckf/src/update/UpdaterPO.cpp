@@ -132,8 +132,21 @@ bool build_po_linear_system(std::shared_ptr<State> state, const std::shared_ptr<
   // Virtual stereo pair for this track (paper eq. 8) — use current geometry
   int base_j = 0, base_k = 1;
   double best_theta = 0;
-  if (!PoseOnlyGeometry::select_base_views(bearings, poses_cur, base_j, base_k, &best_theta) || best_theta < 1e-8)
+  if (!PoseOnlyGeometry::select_base_views(bearings, poses_cur, base_j, base_k, &best_theta) || best_theta < 1e-6)
     return false;
+
+  // Reject degenerate PPO pairs: need both scale factors in eq. (11) well-conditioned
+  {
+    Eigen::Matrix3d R_k_j;
+    Eigen::Vector3d t_k_j;
+    PoseOnlyGeometry::relative_pose(poses_cur[base_j], poses_cur[base_k], R_k_j, t_k_j);
+    const Eigen::Vector3d p_j = bearings[base_j];
+    const Eigen::Vector3d p_k = bearings[base_k];
+    const double a = (t_k_j.cross(p_k)).norm();
+    const double b = (p_k.cross(R_k_j * p_j)).norm();
+    if (a < 1e-6 || b < 1e-6)
+      return false;
+  }
 
   // Hx columns: per-cam calib (optional) then unique IMU clones — mirrors UpdaterHelper ordering intent
   std::unordered_map<std::shared_ptr<Type>, size_t> map_hx;
@@ -157,8 +170,10 @@ bool build_po_linear_system(std::shared_ptr<State> state, const std::shared_ptr<
   }
 
   const int n_meas = (int)views.size();
+  // At most one skipped row (i == base_j); allocate full then conservativeResize
   res = Eigen::VectorXd::Zero(2 * n_meas);
   H_x = Eigen::MatrixXd::Zero(2 * n_meas, total_hx);
+  int ct_row = 0;
 
   const auto &pose_j_cur = poses_cur[base_j];
   const auto &pose_k_cur = poses_cur[base_k];
@@ -168,41 +183,53 @@ bool build_po_linear_system(std::shared_ptr<State> state, const std::shared_ptr<
   const Eigen::Vector3d &bearing_k = bearings[base_k];
 
   for (int i = 0; i < n_meas; i++) {
+    // Paper multi-view set D(j,k) uses i ≠ j (eq. 7); i=j is structurally zero and adds no information
+    if (i == base_j)
+      continue;
+
     // Residual at current estimate
     Eigen::Vector3d p_po = PoseOnlyGeometry::feature_in_camera_po(bearing_j, pose_j_cur, bearing_k, pose_k_cur, poses_cur[i]);
-    if (std::abs(p_po(2)) < 1e-6)
+    // Require feature in front of camera (paper assumes Z>0); behind-camera PO points corrupt the update
+    if (p_po(2) < 1e-6)
       return false;
 
     Eigen::Vector2d z_hat = PoseOnlyGeometry::project_normalized(p_po);
     Eigen::MatrixXd dz_dzn, dz_dzeta;
     state->_cam_intrinsics_cameras.at(views[i].cam_id)->compute_distort_jacobian(z_hat, dz_dzn, dz_dzeta);
     Eigen::Vector2d uv_dist = state->_cam_intrinsics_cameras.at(views[i].cam_id)->distort_d(z_hat);
-    res.segment<2>(2 * i) = views[i].uv_ms - uv_dist;
+    res.segment<2>(2 * ct_row) = views[i].uv_ms - uv_dist;
 
     // Jacobians at FEJ (or current) linearization poses
+    // PoseOnlyGeometry::residual_jacobian_poses returns ∂(z_hat - z_norm)/∂cam = ∂h_norm/∂cam.
+    // OpenVINS EKFUpdate uses res = z - h(x) with H = ∂h/∂x (same as UpdaterMSCKF), so do NOT negate.
     auto Jcam = PoseOnlyGeometry::residual_jacobian_poses(bearing_j, pose_j_lin, bearing_k, pose_k_lin, poses_lin[i], bearings[i]);
-    // PoseOnlyGeometry returns ∂(z_hat - z_norm)/∂cam; we need ∂(z_meas - z_hat)/∂cam = -that
-    Eigen::Matrix<double, 2, 6> H_cam_i = -Jcam.H_i;
-    Eigen::Matrix<double, 2, 6> H_cam_j = -Jcam.H_j;
-    Eigen::Matrix<double, 2, 6> H_cam_k = -Jcam.H_k;
+    Eigen::Matrix<double, 2, 6> H_cam_i = Jcam.H_i;
+    Eigen::Matrix<double, 2, 6> H_cam_j = Jcam.H_j;
+    Eigen::Matrix<double, 2, 6> H_cam_k = Jcam.H_k;
 
     auto accumulate = [&](int view_idx, const Eigen::Matrix<double, 2, 6> &H_cam_role) {
       const PoView &v = views[view_idx];
       Eigen::Matrix<double, 2, 6> H_imu =
           PoseOnlyGeometry::chain_camera_H_to_imu_jpl(H_cam_role, v.R_GtoI_lin, v.R_ItoC, v.p_IinC);
-      H_x.block(2 * i, map_hx[v.clone_imu], 2, 6) += dz_dzn * H_imu;
+      H_x.block(2 * ct_row, map_hx[v.clone_imu], 2, 6) += dz_dzn * H_imu;
 
       if (calib_extrinsics) {
         Eigen::Matrix<double, 2, 6> H_calib =
             PoseOnlyGeometry::chain_camera_H_to_calib_jpl(H_cam_role, v.R_GtoI_lin, v.R_ItoC, v.p_IinC);
-        H_x.block(2 * i, map_hx[v.calib_imu_to_cam], 2, 6) += dz_dzn * H_calib;
+        H_x.block(2 * ct_row, map_hx[v.calib_imu_to_cam], 2, 6) += dz_dzn * H_calib;
       }
     };
 
     accumulate(i, H_cam_i);
     accumulate(base_j, H_cam_j);
     accumulate(base_k, H_cam_k);
+    ct_row++;
   }
+
+  if (ct_row < 1)
+    return false;
+  res.conservativeResize(2 * ct_row);
+  H_x.conservativeResize(2 * ct_row, total_hx);
 
   if (!res.allFinite() || !H_x.allFinite())
     return false;
