@@ -87,6 +87,8 @@ bool build_po_linear_system(std::shared_ptr<State> state, const std::shared_ptr<
   const bool include_base_k = state->_options.po_includes_base_k();
   const bool use_bearing_G = state->_options.po_uses_bearing_G();
   const bool isotropic_all = (po_variant == StateOptions::PoVariant::ISOTROPIC_IK);
+  const bool hybrid_ik = (po_variant == StateOptions::PoVariant::HYBRID_IK);
+  const double hybrid_ik_scale = state->_options.po_hybrid_ik_scale;
 
   // One PoView per observation: bearing + pixel + camera pose from that time's IMU clone ⊕ that cam's calib
   std::vector<PoView> views;
@@ -222,6 +224,9 @@ bool build_po_linear_system(std::shared_ptr<State> state, const std::shared_ptr<
     Dbk_Duv = bearing_from_uv_jacobian(base_k);
   }
 
+  // Row indices (in units of 2-vector blocks) that came from i=k — hybrid inflate target.
+  std::vector<int> ik_rows;
+
   for (int i = 0; i < n_meas; i++) {
     // Always skip i=j (paper D(j,k)). bearing_skip_ik also skips i=k.
     if (i == base_j)
@@ -282,6 +287,9 @@ bool build_po_linear_system(std::shared_ptr<State> state, const std::shared_ptr<
       G.block<2, 2>(2 * ct_row, 2 * base_k) += -dz_dzn2 * DH_Dbk * Dbk_Duv;
     }
 
+    if (hybrid_ik && i == base_k)
+      ik_rows.push_back(ct_row);
+
     ct_row++;
   }
 
@@ -322,6 +330,17 @@ bool build_po_linear_system(std::shared_ptr<State> state, const std::shared_ptr<
   Eigen::MatrixXd L = llt.matrixL();
   res = L.triangularView<Eigen::Lower>().solve(res);
   H_x = L.triangularView<Eigen::Lower>().solve(H_x);
+
+  // Fix A: hybrid_ik only — inflate i=k to R_ik = α σ² I by scaling whitened rows by 1/√α.
+  // α=1 leaves baseline soft-floor behavior unchanged.
+  if (hybrid_ik && hybrid_ik_scale > 1.0 + 1e-12) {
+    const double inv_sqrt_alpha = 1.0 / std::sqrt(hybrid_ik_scale);
+    for (int row : ik_rows) {
+      res.segment<2>(2 * row) *= inv_sqrt_alpha;
+      H_x.block(2 * row, 0, 2, H_x.cols()) *= inv_sqrt_alpha;
+    }
+  }
+
   if (!res.allFinite() || !H_x.allFinite())
     return false;
   return true;
@@ -486,12 +505,13 @@ void UpdaterPO::update(std::shared_ptr<State> state, std::vector<std::shared_ptr
 
   const double n_acc = std::max(1.0, (double)ct_features_used);
   const double n_rej = std::max(1.0, (double)ct_chi2_reject);
-  PRINT_INFO("[PO-UP]: variant=%s used=%zu build_fail=%zu chi2_reject=%zu | "
+  PRINT_INFO("[PO-UP]: variant=%s ik_scale=%.2f used=%zu build_fail=%zu chi2_reject=%zu | "
              "res_norm mean_acc=%.2f max_acc=%.2f mean_rej=%.2f | chi2 mean_acc=%.1f mean_rej=%.1f | "
              "sigma_pix=%.2f chi2_mult=%.2f\n",
-             StateOptions::po_variant_to_string(state->_options.po_variant), ct_features_used, ct_build_fail,
-             ct_chi2_reject, sum_res_norm_accept / n_acc, max_res_norm_accept, sum_res_norm_reject / n_rej,
-             sum_chi2_accept / n_acc, sum_chi2_reject / n_rej, _options.sigma_pix, _options.chi2_multipler);
+             StateOptions::po_variant_to_string(state->_options.po_variant), state->_options.po_hybrid_ik_scale,
+             ct_features_used, ct_build_fail, ct_chi2_reject, sum_res_norm_accept / n_acc, max_res_norm_accept,
+             sum_res_norm_reject / n_rej, sum_chi2_accept / n_acc, sum_chi2_reject / n_rej, _options.sigma_pix,
+             _options.chi2_multipler);
   PRINT_ALL("[PO-UP]: %.4f seconds to clean\n", (rT1 - rT0).total_microseconds() * 1e-6);
   PRINT_ALL("[PO-UP]: %.4f seconds create system (%d features used)\n", (rT2 - rT1).total_microseconds() * 1e-6, (int)ct_features_used);
   PRINT_ALL("[PO-UP]: %.4f seconds compress system\n", (rT3 - rT2).total_microseconds() * 1e-6);

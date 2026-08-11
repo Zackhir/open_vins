@@ -61,6 +61,10 @@ struct StateOptions {
     }
   }
 
+  /// hybrid_ik only: inflate i=k noise as R_ik = α σ² I (α≥1). α=1 → current soft floor.
+  /// Applied after GGᵀ whitening by scaling those rows by 1/√α (effective R=α I).
+  double po_hybrid_ik_scale = 9.0;
+
   /// Numerical integration methods
   enum IntegrationMethod { DISCRETE, RK4, ANALYTICAL };
 
@@ -136,6 +140,12 @@ struct StateOptions {
         std::exit(EXIT_FAILURE);
       }
 
+      parser->parse_config("po_hybrid_ik_scale", po_hybrid_ik_scale, false);
+      if (po_hybrid_ik_scale < 1.0) {
+        PRINT_ERROR(RED "po_hybrid_ik_scale must be >= 1 (got %.3f)\n" RESET, po_hybrid_ik_scale);
+        std::exit(EXIT_FAILURE);
+      }
+
       // Integration method
       std::string integration_str = "rk4";
       parser->parse_config("integration", integration_str);
@@ -198,6 +208,7 @@ struct StateOptions {
     PRINT_DEBUG("  - use_fej: %d\n", do_fej);
     PRINT_DEBUG("  - use_pose_only_update: %d\n", use_pose_only_update);
     PRINT_DEBUG("  - po_variant: %s\n", po_variant_to_string(po_variant));
+    PRINT_DEBUG("  - po_hybrid_ik_scale: %.3f\n", po_hybrid_ik_scale);
     PRINT_DEBUG("  - integration: %d\n", integration_method);
     PRINT_DEBUG("  - calib_cam_extrinsics: %d\n", do_calib_camera_pose);
     PRINT_DEBUG("  - calib_cam_intrinsics: %d\n", do_calib_camera_intrinsics);

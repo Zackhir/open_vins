@@ -20,6 +20,7 @@
     <arg name="use_stereo"  default="true" />
     <arg name="use_pose_only_update" default="false" /> <!-- classical MSCKF vs PO-MSCKF visual update -->
     <arg name="po_variant" default="bearing_skip_ik" /> <!-- bearing_skip_ik | isotropic_ik | hybrid_ik -->
+    <arg name="po_hybrid_ik_scale" default="9.0" /> <!-- hybrid_ik only: R_ik = α σ² I, α≥1 -->
     <arg name="up_msckf_sigma_px" default="1.0" />
     <arg name="up_msckf_chi2_multipler" default="1.0" />
 
@@ -95,6 +96,7 @@
         <param name="max_cameras"               type="int"    value="$(arg max_cameras)" />
         <param name="use_pose_only_update"      type="bool"   value="$(arg use_pose_only_update)" />
         <param name="po_variant"                type="str"    value="$(arg po_variant)" />
+        <param name="po_hybrid_ik_scale"        type="double" value="$(arg po_hybrid_ik_scale)" />
         <param name="feat_rep_msckf"            type="string" value="$(arg feat_rep)" />
         <param name="feat_rep_slam"             type="string" value="$(arg feat_rep)" />
         <param name="feat_rep_aruco"            type="string" value="$(arg feat_rep)" />
