@@ -40,6 +40,27 @@ struct StateOptions {
   /// If true, use pose-only (PO-MSCKF) visual update instead of classical MSCKF
   bool use_pose_only_update = false;
 
+  /// Exclusive PO residual/noise recipe (ignored unless use_pose_only_update).
+  ///   bearing_skip_ik — skip i∈{j,k}, bearing GGᵀ whitening (primary / default)
+  ///   isotropic_ik    — include i=k, isotropic σ² then whiten to R=I
+  ///   hybrid_ik       — include i=k; GGᵀ on non-k rows, soft σ² on i=k (via zero-G + floor)
+  enum PoVariant { BEARING_SKIP_IK, ISOTROPIC_IK, HYBRID_IK };
+  PoVariant po_variant = BEARING_SKIP_IK;
+
+  bool po_includes_base_k() const { return po_variant == ISOTROPIC_IK || po_variant == HYBRID_IK; }
+  bool po_uses_bearing_G() const { return po_variant == BEARING_SKIP_IK || po_variant == HYBRID_IK; }
+  static const char *po_variant_to_string(PoVariant v) {
+    switch (v) {
+    case ISOTROPIC_IK:
+      return "isotropic_ik";
+    case HYBRID_IK:
+      return "hybrid_ik";
+    case BEARING_SKIP_IK:
+    default:
+      return "bearing_skip_ik";
+    }
+  }
+
   /// Numerical integration methods
   enum IntegrationMethod { DISCRETE, RK4, ANALYTICAL };
 
@@ -99,6 +120,21 @@ struct StateOptions {
     if (parser != nullptr) {
       parser->parse_config("use_fej", do_fej);
       parser->parse_config("use_pose_only_update", use_pose_only_update, false);
+
+      // Exclusive PO variant (string → enum). Unknown values are fatal.
+      std::string po_variant_str = "bearing_skip_ik";
+      parser->parse_config("po_variant", po_variant_str, false);
+      if (po_variant_str == "bearing_skip_ik" || po_variant_str == "default" || po_variant_str == "primary") {
+        po_variant = PoVariant::BEARING_SKIP_IK;
+      } else if (po_variant_str == "isotropic_ik") {
+        po_variant = PoVariant::ISOTROPIC_IK;
+      } else if (po_variant_str == "hybrid_ik") {
+        po_variant = PoVariant::HYBRID_IK;
+      } else {
+        PRINT_ERROR(RED "invalid po_variant: %s\n" RESET, po_variant_str.c_str());
+        PRINT_ERROR(RED "please select: bearing_skip_ik, isotropic_ik, hybrid_ik\n" RESET);
+        std::exit(EXIT_FAILURE);
+      }
 
       // Integration method
       std::string integration_str = "rk4";
@@ -161,6 +197,7 @@ struct StateOptions {
     }
     PRINT_DEBUG("  - use_fej: %d\n", do_fej);
     PRINT_DEBUG("  - use_pose_only_update: %d\n", use_pose_only_update);
+    PRINT_DEBUG("  - po_variant: %s\n", po_variant_to_string(po_variant));
     PRINT_DEBUG("  - integration: %d\n", integration_method);
     PRINT_DEBUG("  - calib_cam_extrinsics: %d\n", do_calib_camera_pose);
     PRINT_DEBUG("  - calib_cam_intrinsics: %d\n", do_calib_camera_intrinsics);
