@@ -41,20 +41,28 @@ struct StateOptions {
   bool use_pose_only_update = false;
 
   /// Exclusive PO residual/noise recipe (ignored unless use_pose_only_update).
-  ///   bearing_skip_ik — skip i∈{j,k}, bearing GGᵀ whitening (primary / default)
-  ///   isotropic_ik    — include i=k, isotropic σ² then whiten to R=I
-  ///   hybrid_ik       — include i=k; GGᵀ on non-k rows, soft σ² on i=k (via zero-G + floor)
-  enum PoVariant { BEARING_SKIP_IK, ISOTROPIC_IK, HYBRID_IK };
+  ///   bearing_skip_ik   — skip i∈{j,k}, bearing GGᵀ whitening (primary / default)
+  ///   isotropic_ik      — include i=k, isotropic σ² then whiten to R=I
+  ///   hybrid_ik         — include i=k; GGᵀ on non-k rows, soft σ² on i=k (eig floor max(Λ,I))
+  ///   hybrid_gg_plus_i  — same residual/G as hybrid_ik; cheaper floor R=σ²(GGᵀ+I), no eig
+  enum PoVariant { BEARING_SKIP_IK, ISOTROPIC_IK, HYBRID_IK, HYBRID_GG_PLUS_I };
   PoVariant po_variant = BEARING_SKIP_IK;
 
-  bool po_includes_base_k() const { return po_variant == ISOTROPIC_IK || po_variant == HYBRID_IK; }
-  bool po_uses_bearing_G() const { return po_variant == BEARING_SKIP_IK || po_variant == HYBRID_IK; }
+  bool po_includes_base_k() const {
+    return po_variant == ISOTROPIC_IK || po_variant == HYBRID_IK || po_variant == HYBRID_GG_PLUS_I;
+  }
+  bool po_uses_bearing_G() const {
+    return po_variant == BEARING_SKIP_IK || po_variant == HYBRID_IK || po_variant == HYBRID_GG_PLUS_I;
+  }
+  bool po_uses_gg_plus_i() const { return po_variant == HYBRID_GG_PLUS_I; }
   static const char *po_variant_to_string(PoVariant v) {
     switch (v) {
     case ISOTROPIC_IK:
       return "isotropic_ik";
     case HYBRID_IK:
       return "hybrid_ik";
+    case HYBRID_GG_PLUS_I:
+      return "hybrid_gg_plus_i";
     case BEARING_SKIP_IK:
     default:
       return "bearing_skip_ik";
@@ -130,12 +138,13 @@ struct StateOptions {
         po_variant = PoVariant::ISOTROPIC_IK;
       } else if (po_variant_str == "hybrid_ik") {
         po_variant = PoVariant::HYBRID_IK;
+      } else if (po_variant_str == "hybrid_gg_plus_i") {
+        po_variant = PoVariant::HYBRID_GG_PLUS_I;
       } else {
         PRINT_ERROR(RED "invalid po_variant: %s\n" RESET, po_variant_str.c_str());
-        PRINT_ERROR(RED "please select: bearing_skip_ik, isotropic_ik, hybrid_ik\n" RESET);
+        PRINT_ERROR(RED "please select: bearing_skip_ik, isotropic_ik, hybrid_ik, hybrid_gg_plus_i\n" RESET);
         std::exit(EXIT_FAILURE);
       }
-
       // Integration method
       std::string integration_str = "rk4";
       parser->parse_config("integration", integration_str);

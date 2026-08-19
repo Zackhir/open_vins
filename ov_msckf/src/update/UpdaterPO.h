@@ -46,6 +46,7 @@ class State;
  * Pipeline (see update()):
  *  1) Clean features (need >= 2 clone-timed views)
  *  2) For each feature: PO residual r + Jacobian Hx (no triangulation, no nullspace)
+ *     hybrid_gg_plus_i uses the same residual/G as hybrid_ik with R=σ²(GGᵀ+I)
  *  3) Chi-square outlier gate
  *  4) Stack / compress / EKFUpdate
  *

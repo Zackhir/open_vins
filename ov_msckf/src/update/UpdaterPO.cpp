@@ -61,6 +61,31 @@ struct PoView {
   std::shared_ptr<Vec> cam_intrinsics;
 };
 
+/// Whiten r,H so effective R=I. hybrid_ik: R=σ² Q max(Λ,I) Qᵀ (eig). hybrid_gg_plus_i: R=σ²(GGᵀ+I).
+bool whiten_bearing_system(Eigen::MatrixXd &H_x, Eigen::VectorXd &res, const Eigen::MatrixXd &G, double sigma_pix_sq, bool gg_plus_i) {
+  if (!G.allFinite())
+    return false;
+  Eigen::MatrixXd R_meas;
+  if (gg_plus_i) {
+    const int m = (int)G.rows();
+    R_meas = sigma_pix_sq * (G * G.transpose() + Eigen::MatrixXd::Identity(m, m));
+  } else {
+    Eigen::MatrixXd GG = G * G.transpose();
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eig(GG);
+    if (eig.info() != Eigen::Success)
+      return false;
+    Eigen::VectorXd lam = eig.eigenvalues().cwiseMax(1.0);
+    R_meas = sigma_pix_sq * (eig.eigenvectors() * lam.asDiagonal() * eig.eigenvectors().transpose());
+  }
+  Eigen::LLT<Eigen::MatrixXd> llt(R_meas);
+  if (llt.info() != Eigen::Success)
+    return false;
+  Eigen::MatrixXd L = llt.matrixL();
+  res = L.triangularView<Eigen::Lower>().solve(res);
+  H_x = L.triangularView<Eigen::Lower>().solve(H_x);
+  return res.allFinite() && H_x.allFinite();
+}
+
 /**
  * @brief Build PO residual and Hx for one feature, whitened to unit isotropic noise.
  *
@@ -87,6 +112,7 @@ bool build_po_linear_system(std::shared_ptr<State> state, const std::shared_ptr<
   const bool include_base_k = state->_options.po_includes_base_k();
   const bool use_bearing_G = state->_options.po_uses_bearing_G();
   const bool isotropic_all = (po_variant == StateOptions::PoVariant::ISOTROPIC_IK);
+  const bool gg_plus_i = state->_options.po_uses_gg_plus_i();
 
   // One PoView per observation: bearing + pixel + camera pose from that time's IMU clone ⊕ that cam's calib
   std::vector<PoView> views;
@@ -272,7 +298,7 @@ bool build_po_linear_system(std::shared_ptr<State> state, const std::shared_ptr<
     }
 
     // Bearing noise map G for rows that use GGᵀ whitening.
-    // hybrid_ik: leave G rows for i=k at zero → floored whitening ≈ soft σ²I on that block.
+    // hybrid_ik / hybrid_gg_plus_i: leave G rows for i=k at zero → floor ≈ soft σ²I on that block.
     if (use_bearing_G && i != base_k) {
       Eigen::Matrix<double, 2, 2> DH_Dbj, DH_Dbk;
       PoseOnlyGeometry::prediction_jacobian_bearings(bearing_j, pose_j_lin, bearing_k, pose_k_lin, poses_lin[i], DH_Dbj, DH_Dbk);
@@ -305,26 +331,10 @@ bool build_po_linear_system(std::shared_ptr<State> state, const std::shared_ptr<
   if (!G.allFinite())
     return false;
 
-  // Whiten with R = σ² · Q max(Λ, I) Qᵀ where G Gᵀ = Q Λ Qᵀ.
-  // Shared base bearings make some stacked-PO directions nearly noise-free under the
-  // linear model; flooring eigenvalues at σ² prevents those directions from dominating
-  // the update (overconfident P → χ² blackout → IMU drift). After whitening, R_eff = I.
-  // hybrid_ik zero-G i=k rows → floored eig ≈ soft isotropic σ² on that block (Problem A safe).
-  Eigen::MatrixXd GG = G * G.transpose();
-  Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eig(GG);
-  if (eig.info() != Eigen::Success)
-    return false;
-  Eigen::VectorXd lam = eig.eigenvalues().cwiseMax(1.0);
-  Eigen::MatrixXd R = sigma_pix_sq * (eig.eigenvectors() * lam.asDiagonal() * eig.eigenvectors().transpose());
-  Eigen::LLT<Eigen::MatrixXd> llt(R);
-  if (llt.info() != Eigen::Success)
-    return false;
-  Eigen::MatrixXd L = llt.matrixL();
-  res = L.triangularView<Eigen::Lower>().solve(res);
-  H_x = L.triangularView<Eigen::Lower>().solve(H_x);
-  if (!res.allFinite() || !H_x.allFinite())
-    return false;
-  return true;
+  // hybrid_ik: R = σ² Q max(Λ,I) Qᵀ. hybrid_gg_plus_i: R = σ²(GGᵀ+I) (no eig).
+  // Floor keeps near-null / zero-G (i=k) directions at ≥σ² so they cannot dominate the update.
+  // After whitening, R_eff = I for χ² / QR / EKFUpdate.
+  return whiten_bearing_system(H_x, res, G, sigma_pix_sq, gg_plus_i);
 }
 
 } // namespace

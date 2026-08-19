@@ -9,8 +9,11 @@
     <arg name="max_cameras" default="2" />
     <arg name="use_stereo"  default="true" />
     <arg name="use_pose_only_update" default="false" /> <!-- classical MSCKF vs PO-MSCKF visual update -->
-    <!-- Exclusive PO recipe: bearing_skip_ik | isotropic_ik | hybrid_ik -->
+    <!-- Exclusive PO recipe: bearing_skip_ik | isotropic_ik | hybrid_ik | hybrid_gg_plus_i -->
     <arg name="po_variant" default="bearing_skip_ik" />
+    <!-- Step-8 overrides (match YAML keys; rosparam wins over estimator_config.yaml) -->
+    <arg name="max_clones" default="-1" /> <!-- -1 = use YAML; else override max_clones -->
+    <arg name="max_msckf_in_update" default="-1" />
     <arg name="bag_start"   default="0" /> <!-- v1-2: 0, mh1: 40, mh2: 35, mh3: 17.5, mh4-5: 15 -->
     <arg name="bag_durr"    default="-1" /> <!-- seconds of bag to process; -1 = full -->
     <arg name="dataset"     default="dataset-room1_512_16" /> <!-- V1_01_easy, V1_02_medium, V1_03_difficult, V2_02_medium, dataset-room1_512_16 -->
@@ -46,6 +49,8 @@
         <param name="max_cameras"               type="int"    value="$(arg max_cameras)" />
         <param name="use_pose_only_update"      type="bool"   value="$(arg use_pose_only_update)" />
         <param name="po_variant"                type="str"    value="$(arg po_variant)" />
+        <param if="$(eval int(arg('max_clones')) >= 0)" name="max_clones" type="int" value="$(arg max_clones)" />
+        <param if="$(eval int(arg('max_msckf_in_update')) >= 0)" name="max_msckf_in_update" type="int" value="$(arg max_msckf_in_update)" />
 
         <!-- timing statistics recording -->
         <param name="record_timing_information" type="bool"   value="$(arg dotime)" />
