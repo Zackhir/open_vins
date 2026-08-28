@@ -15,6 +15,7 @@ import numpy as np
 ROOT = os.environ.get("RESULTS_DIR", "/results/baseline_mono_msckf")
 DATASETS = os.environ.get("DATASETS_DIR", "/datasets")
 OUT_PDF = os.path.join(ROOT, "baseline_mono_msckf_report.pdf")
+CPU_CORES = int(os.environ.get("CPU_CORES", "24"))
 
 SEQS = [
     ("MH_01_easy", f"{DATASETS}/machine_hall/MH_01_easy/MH_01_easy/mav0/state_groundtruth_estimate0/data.txt"),
@@ -165,11 +166,19 @@ def page_table(pdf, rows):
         "Table RMSE: ov_eval error_singlerun posyaw\n"
         "Plots: trajectory + error_dataset-style RMSE (ori/pos vs time)\n"
         "Runtime: timing.txt mean total → ms/frame; FPS = 1/mean_total (offline serial)\n"
-        "CPU: psutil mean/max % of ros1_serial_msckf",
+        f"CPU: psutil mean/max % of ros1_serial_msckf ÷ {CPU_CORES} cores (%/core)",
         fontsize=11,
         va="top",
     )
-    col_labels = ["Sequence", "Trans. RMSE (m)", "Ori. RMSE (deg)", "ms/frame", "FPS", "CPU mean %", "CPU max %"]
+    col_labels = [
+        "Sequence",
+        "Trans. RMSE (m)",
+        "Ori. RMSE (deg)",
+        "ms/frame",
+        "FPS",
+        "CPU mean %/core",
+        "CPU max %/core",
+    ]
     cell = [
         [
             r["sequence"],
@@ -177,8 +186,8 @@ def page_table(pdf, rows):
             f"{float(r['rmse_ori_deg']):.3f}",
             f"{float(r['ms_per_frame']):.2f}",
             f"{float(r['fps']):.1f}",
-            f"{float(r['cpu_mean_pct']):.1f}",
-            f"{float(r['cpu_max_pct']):.1f}",
+            f"{float(r['cpu_mean_pct']) / CPU_CORES:.1f}",
+            f"{float(r['cpu_max_pct']) / CPU_CORES:.1f}",
         ]
         for r in rows
     ]
@@ -269,7 +278,11 @@ def page_sequence(pdf, name, gt_path, table_row):
     ax2.set_xlim(0.0, float(s["t"][-1]) if len(s["t"]) else 1.0)
     ax2.grid(True, alpha=0.3)
     fig.tight_layout()
-    fig.savefig(os.path.join(ROOT, name, "rmse.png"), dpi=200)
+    rmse_path = os.path.join(ROOT, name, "rmse.png")
+    try:
+        fig.savefig(rmse_path, dpi=200)
+    except OSError:
+        pass  # sequence dirs may be root-owned from Docker runs
     plt.close(fig)
 
 

@@ -11,9 +11,15 @@
     <arg name="use_pose_only_update" default="false" /> <!-- classical MSCKF vs PO-MSCKF visual update -->
     <!-- Exclusive PO recipe: bearing_skip_ik | isotropic_ik | hybrid_ik | hybrid_gg_plus_i -->
     <arg name="po_variant" default="bearing_skip_ik" />
-    <!-- Step-8 overrides (match YAML keys; rosparam wins over estimator_config.yaml) -->
-    <arg name="max_clones" default="-1" /> <!-- -1 = use YAML; else override max_clones -->
+    <!-- Param-study overrides (match YAML keys; rosparam wins over estimator_config.yaml) -->
+    <arg name="max_clones" default="-1" /> <!-- -1 = use YAML; else override -->
     <arg name="max_msckf_in_update" default="-1" />
+    <arg name="num_pts" default="-1" />
+    <arg name="max_slam" default="-1" />
+    <arg name="max_slam_in_update" default="-1" />
+    <arg name="fast_threshold" default="-1" /> <!-- Tier B tracking -->
+    <arg name="min_px_dist" default="-1" />
+    <arg name="up_msckf_chi2_multipler" default="" /> <!-- empty = YAML; else override -->
     <arg name="bag_start"   default="0" /> <!-- v1-2: 0, mh1: 40, mh2: 35, mh3: 17.5, mh4-5: 15 -->
     <arg name="bag_durr"    default="-1" /> <!-- seconds of bag to process; -1 = full -->
     <arg name="dataset"     default="dataset-room1_512_16" /> <!-- V1_01_easy, V1_02_medium, V1_03_difficult, V2_02_medium, dataset-room1_512_16 -->
@@ -51,6 +57,12 @@
         <param name="po_variant"                type="str"    value="$(arg po_variant)" />
         <param if="$(eval int(arg('max_clones')) >= 0)" name="max_clones" type="int" value="$(arg max_clones)" />
         <param if="$(eval int(arg('max_msckf_in_update')) >= 0)" name="max_msckf_in_update" type="int" value="$(arg max_msckf_in_update)" />
+        <param if="$(eval int(arg('num_pts')) >= 0)" name="num_pts" type="int" value="$(arg num_pts)" />
+        <param if="$(eval int(arg('max_slam')) >= 0)" name="max_slam" type="int" value="$(arg max_slam)" />
+        <param if="$(eval int(arg('max_slam_in_update')) >= 0)" name="max_slam_in_update" type="int" value="$(arg max_slam_in_update)" />
+        <param if="$(eval int(arg('fast_threshold')) >= 0)" name="fast_threshold" type="int" value="$(arg fast_threshold)" />
+        <param if="$(eval int(arg('min_px_dist')) >= 0)" name="min_px_dist" type="int" value="$(arg min_px_dist)" />
+        <param if="$(eval arg('up_msckf_chi2_multipler') != '')" name="up_msckf_chi2_multipler" type="double" value="$(arg up_msckf_chi2_multipler)" />
 
         <!-- timing statistics recording -->
         <param name="record_timing_information" type="bool"   value="$(arg dotime)" />
