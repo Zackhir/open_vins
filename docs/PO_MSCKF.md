@@ -73,6 +73,7 @@ Launch overrides for param study (see `ov_msckf/launch/serial.launch`): `max_clo
 | `ov_msckf/src/state/StateOptions.h` | Options + variant parsing |
 | `ov_msckf/src/core/VioManager.cpp` | Routes MSCKF features to PO when flag on |
 | Unit / FD tests | `test_pose_only_geometry.cpp`, `test_pose_only_jacobians.cpp`, … |
+| RViz path compare | `ov_eval` launch + publisher + `scripts/traj_compare/` (see below) |
 
 Shared pipeline after residual build: **χ² gate → QR compress → EKF update**. SLAM features (if enabled) still use the classical SLAM updater.
 
@@ -128,6 +129,42 @@ GG+I does not cost extra CPU vs MSCKF; ms/frame rises slightly but stays \(\ll 5
 Param study takeaway: stacking **all** one-axis winners hurts; the **minimal** override pair (`clones=15`, `msckf_in_update=40`) is best.
 
 Simulation (`rpng_sim`): MSCKF NEES stays healthy (~1–3). GG+I has finite RMSE but can remain overconfident (NEES higher than MSCKF)—consistency is a separate track from bag ATE.
+
+---
+
+## Trajectory plots (MSCKF vs PO vs GT)
+
+Animated **RViz** overlay of three TUM trajectories after **posyaw** alignment to ground truth:
+
+| File | Role |
+|------|------|
+| `ov_eval/launch/compare_trajectories.launch` | Launch publisher + optional RViz |
+| `ov_eval/python/path_compare_publisher.py` | Publishes three `nav_msgs/Path` topics (MSCKF / PO / GT) |
+| `ov_eval/rviz/compare_three_paths.rviz` | RViz config for the overlay |
+| `scripts/traj_compare/run_compare_video.sh` | In-container runner (pick sequence + estimate paths) |
+| `scripts/traj_compare/run_compare_video_host.sh` | Host wrapper: Docker + X11 (+ optional `--record` to mp4) |
+
+**Args** (`compare_trajectories.launch`): `msckf_path`, `hybrid_path` (PO estimate; name kept for history), `gt_path`, `speed` (replay multiplier), `loop`, `hold_sec`, `rviz`.
+
+**Host example** (needs Docker image, datasets/results mounts, and a graphical `DISPLAY`):
+
+```bash
+cd /path/to/open_vins
+./scripts/traj_compare/run_compare_video_host.sh MH_01_easy --speed 15
+./scripts/traj_compare/run_compare_video_host.sh MH_03_medium --speed 15 --record
+```
+
+Direct launch (paths are absolute TUM `estimate.txt` / GT files):
+
+```bash
+roslaunch ov_eval compare_trajectories.launch \
+  msckf_path:=/path/to/msckf/estimate.txt \
+  hybrid_path:=/path/to/po_gg_plus_i/estimate.txt \
+  gt_path:=/path/to/groundtruth.txt \
+  speed:=5.0
+```
+
+Static XY / Z / RMSE panel plots used in reports are generated outside this package (see `~/workspace/po_msckf_report/scripts/`).
 
 ---
 
