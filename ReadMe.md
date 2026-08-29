@@ -1,5 +1,9 @@
 # OpenVINS
 
+> **Fork note ([Zackhir](https://github.com/Zackhir/open_vins)):** This fork adds a **pose-only MSCKF (PO-MSCKF)** visual update path with a locked noise model \(R=\sigma^2(GG^\top+I)\).  
+> See **[docs/PO_MSCKF.md](docs/PO_MSCKF.md)** for flags, variants, how to run, and evaluation notes.  
+> Upstream OpenVINS documentation below is unchanged.
+
 [![ROS 1 Workflow](https://github.com/rpng/open_vins/actions/workflows/build_ros1.yml/badge.svg)](https://github.com/rpng/open_vins/actions/workflows/build_ros1.yml)
 [![ROS 2 Workflow](https://github.com/rpng/open_vins/actions/workflows/build_ros2.yml/badge.svg)](https://github.com/rpng/open_vins/actions/workflows/build_ros2.yml)
 [![ROS Free Workflow](https://github.com/rpng/open_vins/actions/workflows/build.yml/badge.svg)](https://github.com/rpng/open_vins/actions/workflows/build.yml)
