@@ -9,10 +9,4 @@ doxgen_generated
 doc
 .vscode
 .cursor/
-
-# Local 3-trajectory RViz compare (not for the fork)
-ov_eval/python/path_compare_publisher.py
-ov_eval/launch/compare_trajectories.launch
-ov_eval/rviz/
-scripts/traj_compare/
 _ffmpeg.log

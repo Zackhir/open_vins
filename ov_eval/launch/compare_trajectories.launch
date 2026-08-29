@@ -1,0 +1,30 @@
+<launch>
+  <!-- Animated RViz replay: MSCKF + hybrid PO-MSCKF + GT (posyaw-aligned to GT). -->
+
+  <arg name="msckf_path" />
+  <arg name="hybrid_path" />
+  <arg name="gt_path" />
+
+  <arg name="frame_id" default="map" />
+  <arg name="speed" default="5.0" doc="Replay speed multiplier (5 = 5x faster than real time)" />
+  <arg name="loop" default="false" />
+  <arg name="hold_sec" default="2.0" />
+  <arg name="rviz" default="true" />
+  <arg name="rviz_config" default="$(find ov_eval)/rviz/compare_three_paths.rviz" />
+  <arg name="shutdown_when_done" default="false" />
+
+  <node pkg="ov_eval" type="path_compare_publisher.py" name="path_compare_publisher" output="screen"
+        required="$(arg shutdown_when_done)">
+    <param name="msckf_path" value="$(arg msckf_path)" />
+    <param name="hybrid_path" value="$(arg hybrid_path)" />
+    <param name="gt_path" value="$(arg gt_path)" />
+    <param name="frame_id" value="$(arg frame_id)" />
+    <param name="speed" value="$(arg speed)" />
+    <param name="loop" value="$(arg loop)" />
+    <param name="hold_sec" value="$(arg hold_sec)" />
+  </node>
+
+  <node if="$(arg rviz)" pkg="rviz" type="rviz" name="rviz_compare" output="screen"
+        args="-d $(arg rviz_config)"
+        launch-prefix="env DISABLE_ROS1_EOL_WARNINGS=1 ROS_DISTRO=noetic ROS_VERSION=1 QT_X11_NO_MITSHM=1" />
+</launch>
